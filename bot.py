@@ -104,6 +104,9 @@ def format_ts_msk(ts_ms):
     return dt_msk.strftime('%Y-%m-%d %H:%M:%S МСК')
 
 def check_token(token):
+    url_quota = "https://api.z.ai/api/monitor/usage/quota/limit"
+    url_sub = "https://chat.z.ai/api/v1/users/user/subscription"
+    
     headers = {
         "Authorization": f"Bearer {token}",
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:154.0) Gecko/20100101 Firefox/154.0",
@@ -116,7 +119,7 @@ def check_token(token):
     }
     
     try:
-        response = requests.get("https://api.z.ai/api/monitor/usage/quota/limit", headers=headers, timeout=15)
+        response = requests.get(url_quota, headers=headers, timeout=15)
         if response.status_code == 200:
             data = response.json()
             if data.get("code") == 200:
@@ -125,7 +128,7 @@ def check_token(token):
                 # Пытаемся получить дату подписки
                 sub_end = None
                 try:
-                    res_sub = requests.get("https://chat.z.ai/api/v1/users/user/subscription", headers=headers, timeout=5)
+                    res_sub = requests.get(url_sub, headers=headers, timeout=5)
                     if res_sub.status_code == 200:
                         sub_data = res_sub.json()
                         # Разбираем ответ подписки (обычно data.expire_at, data.end_time и т.д.)
@@ -193,7 +196,7 @@ async def start_cmd(message: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Добавить аккаунт", callback_data="add_acc")],
         [InlineKeyboardButton(text="📋 Мои аккаунты", callback_data="list_accs")],
-        [InlineKeyboardButton(text="ℹ️ Об авторе", callback_data="author_info")]
+        [InlineKeyboardButton(text="ℹ️ О проекте", callback_data="author_info")]
     ])
     await message.answer("Привет! Я приватный бот для мониторинга лимитов Z.ai.\nЧто будем делать?", reply_markup=kb)
 
@@ -203,9 +206,12 @@ async def author_info_cb(callback: CallbackQuery):
         [InlineKeyboardButton(text="🔙 Назад", callback_data="start_menu")]
     ])
     await callback.message.edit_text(
-        f"👨‍💻 <b>Автор бота:</b> \nБот разработан специально для приватного использования.\nДля связи пишите <a href='tg://user?id={OWNER_ID}'>владельцу</a>.",
+        f"🤖 <b>О проекте:</b> \nБот для мониторинга лимитов Z.ai.\n\n"
+        f"👨‍💻 <b>Владелец:</b> <a href='tg://user?id={OWNER_ID}'>@theillarion</a>\n"
+        f"🐙 <b>Исходный код:</b> <a href='https://github.com/theillarion/z-ai-usage-tg-bot'>GitHub Repository</a>",
         reply_markup=kb,
-        parse_mode="HTML"
+        parse_mode="HTML",
+        disable_web_page_preview=True
     )
     await callback.answer()
 
