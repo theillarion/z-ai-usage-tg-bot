@@ -11,6 +11,9 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram import BaseMiddleware
+from aiogram.types import TelegramObject
+from typing import Callable, Dict, Any, Awaitable
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", 0))
@@ -20,9 +23,24 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 router = Router()
 
-# Restrict all routes to OWNER_ID
-router.message.filter(F.from_user.id == OWNER_ID)
-router.callback_query.filter(F.from_user.id == OWNER_ID)
+class AuthMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: Dict[str, Any]
+    ) -> Any:
+        user = data.get("event_from_user")
+        if user and user.id != OWNER_ID:
+            if isinstance(event, Message):
+                await event.answer(f'Бот отвечает только закрытому кругу лиц. Для связи пишите <a href="tg://user?id={OWNER_ID}">владельцу</a>.', parse_mode="HTML")
+            elif isinstance(event, CallbackQuery):
+                await event.answer("Доступ запрещен.", show_alert=True)
+            return
+        return await handler(event, data)
+
+dp.message.middleware(AuthMiddleware())
+dp.callback_query.middleware(AuthMiddleware())
 
 # --- DB Setup ---
 DB_DIR = "/data"
@@ -86,7 +104,6 @@ def format_ts_msk(ts_ms):
     return dt_msk.strftime('%Y-%m-%d %H:%M:%S МСК')
 
 def check_token(token):
-    url = "https://api.z.ai/api/monitor/usage/quota/limit"
     headers = {
         "Authorization": f"Bearer {token}",
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:154.0) Gecko/20100101 Firefox/154.0",
@@ -99,11 +116,28 @@ def check_token(token):
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get("https://api.z.ai/api/monitor/usage/quota/limit", headers=headers, timeout=15)
         if response.status_code == 200:
             data = response.json()
             if data.get("code") == 200:
-                return True, data.get("data", {})
+                quota_data = data.get("data", {})
+                
+                # Пытаемся получить дату подписки
+                sub_end = None
+                try:
+                    res_sub = requests.get("https://chat.z.ai/api/v1/users/user/subscription", headers=headers, timeout=5)
+                    if res_sub.status_code == 200:
+                        sub_data = res_sub.json()
+                        # Разбираем ответ подписки (обычно data.expire_at, data.end_time и т.д.)
+                        if sub_data.get("code") == 0 and sub_data.get("data"):
+                            s_data = sub_data.get("data", {})
+                            sub_end = s_data.get("expire_at") or s_data.get("end_time") or s_data.get("current_period_end")
+                except Exception:
+                    pass
+                    
+                quota_data["subscription_end"] = sub_end
+                return True, quota_data
+                
             return False, f"Ошибка API: {data.get('msg')}"
         return False, f"HTTP Error {response.status_code}"
     except Exception as e:
@@ -112,9 +146,19 @@ def check_token(token):
 def format_limits_text(acc_name, data):
     limits = data.get("limits", [])
     level = data.get("level", "unknown").upper()
+    sub_end = data.get("subscription_end")
     
     msg = f"📊 <b>Аккаунт:</b> {acc_name}\n"
-    msg += f"🔹 <b>Подписка:</b> {level}\n\n"
+    msg += f"🔹 <b>Подписка:</b> {level}\n"
+    
+    if sub_end:
+        # Если время пришло строкой (ISO), оставляем как есть, если timestamp - конвертируем
+        if isinstance(sub_end, (int, float)):
+            msg += f"⏳ <b>Истекает:</b> {format_ts_msk(sub_end * 1000 if sub_end < 9999999999 else sub_end)}\n"
+        else:
+            msg += f"⏳ <b>Истекает:</b> {sub_end}\n"
+    
+    msg += "\n"
     
     for limit in limits:
         l_type = limit.get("type")
@@ -126,9 +170,9 @@ def format_limits_text(acc_name, data):
         
         if l_type == "TOKENS_LIMIT":
             if l_unit == 3:
-                msg += f"⏳ <b>5-часовой лимит:</b> Остаток {percentage}%\n   Сброс: {format_ts_msk(next_reset)}\n\n"
+                msg += f"⏳ <b>5-часовой лимит:</b> Использовано {percentage}%\n   Сброс: {format_ts_msk(next_reset)}\n\n"
             elif l_unit == 6:
-                msg += f"📅 <b>Недельный лимит:</b> Остаток {percentage}%\n   Сброс: {format_ts_msk(next_reset)}\n\n"
+                msg += f"📅 <b>Недельный лимит:</b> Использовано {percentage}%\n   Сброс: {format_ts_msk(next_reset)}\n\n"
         elif l_type == "TIME_LIMIT":
             msg += f"🛠 <b>Tools:</b> Осталось {remaining} из {usage}\n   Сброс: {format_ts_msk(next_reset)}\n"
             details = limit.get("usageDetails", [])
@@ -148,9 +192,22 @@ class AddAccountFSM(StatesGroup):
 async def start_cmd(message: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Добавить аккаунт", callback_data="add_acc")],
-        [InlineKeyboardButton(text="📋 Мои аккаунты", callback_data="list_accs")]
+        [InlineKeyboardButton(text="📋 Мои аккаунты", callback_data="list_accs")],
+        [InlineKeyboardButton(text="ℹ️ Об авторе", callback_data="author_info")]
     ])
     await message.answer("Привет! Я приватный бот для мониторинга лимитов Z.ai.\nЧто будем делать?", reply_markup=kb)
+
+@router.callback_query(F.data == "author_info")
+async def author_info_cb(callback: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="start_menu")]
+    ])
+    await callback.message.edit_text(
+        f"👨‍💻 <b>Автор бота:</b> \nБот разработан специально для приватного использования.\nДля связи пишите <a href='tg://user?id={OWNER_ID}'>владельцу</a>.",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+    await callback.answer()
 
 @router.callback_query(F.data == "add_acc")
 async def add_acc_start(callback: CallbackQuery, state: FSMContext):
