@@ -51,14 +51,17 @@ def evaluate_alert(
 
     elif alert["alert_type"] == "burn_rate":
         window_duration_ms = (5 * 3600 * 1000) if unit == 3 else (7 * 86400 * 1000)
+        burn_threshold_ms = int(2.5 * 3600 * 1000) if unit == 3 else int(2.5 * 86400 * 1000)
+        remaining_threshold_ms = window_duration_ms - burn_threshold_ms
         remaining_ms = next_reset - now_ms if next_reset else 0
 
-        # Consumed >= 50% while more than 50% of the period time is still remaining
-        if remaining_ms > (window_duration_ms / 2) and pct >= 50:
+        # Consumed >= 50% within the burn threshold duration (elapsed <= 2.5h / 2.5d)
+        if remaining_ms >= remaining_threshold_ms and pct >= 50:
             should_trigger = True
+            time_spent_str = "меньше 2.5 часов" if unit == 3 else "меньше 2.5 дней"
             trigger_reason = (
                 f"⚡️ <b>Быстрый расход (Burn Rate):</b> израсходовано <b>{pct}%</b> "
-                f"лимита, хотя прошло меньше половины срока!"
+                f"лимита, хотя прошло {time_spent_str}!"
             )
 
     return should_trigger, trigger_reason, next_reset, current_val, usage_val

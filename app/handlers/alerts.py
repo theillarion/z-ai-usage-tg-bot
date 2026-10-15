@@ -52,7 +52,8 @@ async def _render_account_alerts(callback: CallbackQuery, acc_id: int) -> bool:
                 pct_val = int(pct) if isinstance(pct, (int, float)) and float(pct).is_integer() else pct
                 rule_str = f"⏳ {unit_str} > {pct_val}%"
             else:
-                rule_str = f"⚡️ {unit_str} Burn Rate (>50% за пол-периода)"
+                period_str = "2.5ч" if a["limit_unit"] == 3 else "2.5д"
+                rule_str = f"⚡️ {unit_str} Burn Rate (>50% за {period_str})"
             text += f"{idx}. {rule_str}\n"
 
     kb = get_alerts_list_kb(acc_id, alerts)

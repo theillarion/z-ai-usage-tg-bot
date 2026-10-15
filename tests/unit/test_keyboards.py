@@ -61,6 +61,8 @@ def test_keyboards_structure():
 
     add_alert_kb = get_add_alert_menu_kb(42)
     assert any("setalt_42_threshold_3_50" in btn.callback_data for row in add_alert_kb.inline_keyboard for btn in row)
+    assert any("⚡️ 5ч Burn Rate (>50% за 2.5ч)" == btn.text for row in add_alert_kb.inline_keyboard for btn in row)
+    assert any("⚡️ Неделя Burn Rate (>50% за 2.5д)" == btn.text for row in add_alert_kb.inline_keyboard for btn in row)
 
     custom_unit_kb = get_custom_unit_choice_kb(42)
     assert custom_unit_kb.inline_keyboard[0][0].callback_data == "customchoose_42_3"

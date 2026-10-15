@@ -28,8 +28,8 @@ def test_evaluate_alert_threshold():
 
 def test_evaluate_alert_burn_rate_5h():
     now_ms = 1000000000000
-    # 5h = 18_000_000 ms. Half is 9_000_000 ms.
-    # Case A: 12_000_000 ms remaining (less than half elapsed) and pct >= 50 -> Trigger
+    # 5h = 18_000_000 ms. 2.5h threshold = 9_000_000 ms remaining.
+    # Case A: 12_000_000 ms remaining (less than 2.5h elapsed) and pct >= 50 -> Trigger
     next_reset_early = now_ms + 12000000
     limits_early = [{"unit": 3, "percentage": 60.0, "nextResetTime": next_reset_early}]
     alert_burn = {"limit_unit": 3, "alert_type": "burn_rate", "threshold_pct": 50.0}
@@ -37,8 +37,9 @@ def test_evaluate_alert_burn_rate_5h():
     triggered, reason, _, _, _ = evaluate_alert(alert_burn, limits_early, now_ms=now_ms)
     assert triggered is True
     assert "Быстрый расход (Burn Rate)" in reason
+    assert "меньше 2.5 часов" in reason
 
-    # Case B: 5_000_000 ms remaining (more than half elapsed) -> Do not trigger
+    # Case B: 5_000_000 ms remaining (more than 2.5h elapsed) -> Do not trigger
     next_reset_late = now_ms + 5000000
     limits_late = [{"unit": 3, "percentage": 60.0, "nextResetTime": next_reset_late}]
     triggered, _, _, _, _ = evaluate_alert(alert_burn, limits_late, now_ms=now_ms)
@@ -52,14 +53,27 @@ def test_evaluate_alert_burn_rate_5h():
 
 def test_evaluate_alert_burn_rate_weekly():
     now_ms = 1000000000000
-    # 7 days = 604_800_000 ms. Half is 302_400_000 ms.
-    next_reset_early = now_ms + 400000000  # > 302_400_000 ms remaining
-    limits = [{"unit": 6, "percentage": 55.0, "nextResetTime": next_reset_early}]
+    # 7 days = 604_800_000 ms. 2.5 days threshold = 216_000_000 ms elapsed => 388_800_000 ms remaining.
+    # Case A: 400_000_000 ms remaining (elapsed ~2.37 days < 2.5 days) and pct >= 50 -> Trigger
+    next_reset_early = now_ms + 400000000  # > 388_800_000 ms remaining
+    limits_early = [{"unit": 6, "percentage": 55.0, "nextResetTime": next_reset_early}]
     alert = {"limit_unit": 6, "alert_type": "burn_rate", "threshold_pct": 50.0}
 
-    triggered, reason, _, _, _ = evaluate_alert(alert, limits, now_ms=now_ms)
+    triggered, reason, _, _, _ = evaluate_alert(alert, limits_early, now_ms=now_ms)
     assert triggered is True
     assert "Быстрый расход" in reason
+    assert "меньше 2.5 дней" in reason
+
+    # Case B: 345_600_000 ms remaining (elapsed 3.0 days > 2.5 days) -> Do not trigger
+    next_reset_late = now_ms + 345600000
+    limits_late = [{"unit": 6, "percentage": 55.0, "nextResetTime": next_reset_late}]
+    triggered, _, _, _, _ = evaluate_alert(alert, limits_late, now_ms=now_ms)
+    assert triggered is False
+
+    # Case C: early, but pct < 50% -> Do not trigger
+    limits_low_pct = [{"unit": 6, "percentage": 45.0, "nextResetTime": next_reset_early}]
+    triggered, _, _, _, _ = evaluate_alert(alert, limits_low_pct, now_ms=now_ms)
+    assert triggered is False
 
 
 def test_evaluate_alert_anti_spam():

@@ -55,7 +55,7 @@ async def test_acc_alerts_cb_empty_and_with_alerts(tmp_db_path, monkeypatch):
     mock_cb.message.edit_text.assert_awaited_once()
     text = mock_cb.message.edit_text.call_args[0][0]
     assert "5-часовой > 80%" in text
-    assert "Недельный Burn Rate" in text
+    assert "Недельный Burn Rate (>50% за 2.5д)" in text
 
 
 @pytest.mark.asyncio

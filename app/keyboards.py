@@ -85,7 +85,7 @@ def get_add_alert_menu_kb(acc_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📅 Недельный > 50%", callback_data=f"setalt_{acc_id}_threshold_6_50")],
             [InlineKeyboardButton(text="📅 Недельный > 80%", callback_data=f"setalt_{acc_id}_threshold_6_80")],
             [InlineKeyboardButton(text="⚡️ 5ч Burn Rate (>50% за 2.5ч)", callback_data=f"setalt_{acc_id}_burn_3_50")],
-            [InlineKeyboardButton(text="⚡️ Неделя Burn Rate (>50% за 3.5д)", callback_data=f"setalt_{acc_id}_burn_6_50")],
+            [InlineKeyboardButton(text="⚡️ Неделя Burn Rate (>50% за 2.5д)", callback_data=f"setalt_{acc_id}_burn_6_50")],
             [InlineKeyboardButton(text="✏️ Свой процент...", callback_data=f"customunit_{acc_id}")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data=f"alerts_{acc_id}")],
         ]
