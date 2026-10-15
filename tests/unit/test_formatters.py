@@ -208,3 +208,23 @@ def test_format_limits_text_unknown_limit_type():
     assert "⏱ <b>Лимит (unit=99) (SPECIAL_QUOTA):</b> Использовано 12% (12 / 100)" in text
     assert "Сброс:" in text
 
+
+def test_format_limits_text_no_next_reset():
+    data = {
+        "limits": [
+            {
+                "type": "OTHER_QUOTA",
+                "unit": 3,
+                "percentage": 50,
+                "currentValue": 50,
+                "usage": 100,
+                "nextResetTime": 0,
+            }
+        ]
+    }
+    text = format_limits_text("NoResetAcc", data)
+    assert "Использовано 50%" in text
+    assert "Сброс:" not in text
+
+
+

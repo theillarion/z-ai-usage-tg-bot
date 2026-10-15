@@ -105,6 +105,67 @@ async def test_alerts_background_worker_initial_delay_stop(tmp_db_path, mock_bot
 
 
 @pytest.mark.asyncio
+async def test_alerts_background_worker_initial_delay_timeout(tmp_db_path, mock_bot):
+    stop_event = asyncio.Event()
+    with patch("app.services.alerts.check_alerts_job", new_callable=AsyncMock) as mock_job:
+        worker_task = asyncio.create_task(
+            alerts_background_worker(
+                bot=mock_bot,
+                owner_id=9999,
+                check_interval=0.01,
+                initial_delay=0.01,
+                db_path=tmp_db_path,
+                stop_event=stop_event,
+            )
+        )
+        # Let initial delay expire and trigger loop
+        await asyncio.sleep(0.04)
+        stop_event.set()
+        await worker_task
+        assert mock_job.await_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_alerts_background_worker_no_stop_event(tmp_db_path, mock_bot):
+    with patch("app.services.alerts.check_alerts_job", new_callable=AsyncMock) as mock_job:
+        worker_task = asyncio.create_task(
+            alerts_background_worker(
+                bot=mock_bot,
+                owner_id=9999,
+                check_interval=0.01,
+                initial_delay=0.01,
+                db_path=tmp_db_path,
+                stop_event=None,
+            )
+        )
+        await asyncio.sleep(0.03)
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
+        assert mock_job.await_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_alerts_background_worker_stop_event_break(tmp_db_path, mock_bot):
+    stop_event = asyncio.Event()
+    stop_event.set()
+    worker_task = asyncio.create_task(
+        alerts_background_worker(
+            bot=mock_bot,
+            owner_id=9999,
+            check_interval=0.01,
+            initial_delay=0,
+            db_path=tmp_db_path,
+            stop_event=stop_event,
+        )
+    )
+    await worker_task
+
+
+
+@pytest.mark.asyncio
 async def test_check_alerts_job_edge_cases(tmp_db_path, mock_bot):
     # 1. Alert referencing deleted account
     acc_id = add_account("ToDel", "tok", tmp_db_path)
