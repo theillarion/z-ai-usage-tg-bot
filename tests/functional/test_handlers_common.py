@@ -13,12 +13,16 @@ async def test_cancel_cmd(mock_fsm_context):
     assert await mock_fsm_context.get_state() == AddAccountFSM.token.state
 
     mock_msg = MagicMock(spec=Message)
+    mock_msg.from_user = MagicMock(id=123)
     mock_msg.answer = AsyncMock()
 
     await cancel_cmd(mock_msg, mock_fsm_context)
 
     assert await mock_fsm_context.get_state() is None
-    mock_msg.answer.assert_awaited_once_with("Действие отменено.")
+    mock_msg.answer.assert_awaited_once()
+    args, kwargs = mock_msg.answer.call_args
+    assert "Действие отменено." in args[0]
+    assert "reply_markup" in kwargs
 
 
 @pytest.mark.asyncio
@@ -54,11 +58,63 @@ async def test_author_info_cb():
 @pytest.mark.asyncio
 async def test_start_menu_cb():
     mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.from_user = MagicMock(id=123)
     mock_cb.message = MagicMock(spec=Message)
+    mock_cb.message.edit_text = AsyncMock()
     mock_cb.message.answer = AsyncMock()
     mock_cb.answer = AsyncMock()
 
     await start_menu_cb(mock_cb)
 
-    mock_cb.message.answer.assert_awaited_once()
+    mock_cb.message.edit_text.assert_awaited_once()
     mock_cb.answer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_author_info_cb_exception():
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.message = MagicMock(spec=Message)
+    mock_cb.message.edit_text = AsyncMock(side_effect=RuntimeError("Edit failed"))
+    mock_cb.answer = AsyncMock(side_effect=RuntimeError("Answer failed"))
+
+    await author_info_cb(mock_cb)
+
+
+@pytest.mark.asyncio
+async def test_start_menu_cb_fallback():
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.from_user = MagicMock(id=123)
+    mock_cb.message = MagicMock(spec=Message)
+    mock_cb.message.edit_text = AsyncMock(side_effect=RuntimeError("Cannot edit"))
+    mock_cb.message.answer = AsyncMock()
+    mock_cb.answer = AsyncMock(side_effect=RuntimeError("Cannot answer"))
+
+    await start_menu_cb(mock_cb)
+    mock_cb.message.answer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_safe_helpers():
+    from app.handlers import safe_answer, safe_edit_text
+
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.answer = AsyncMock()
+    mock_msg = MagicMock(spec=Message)
+    mock_msg.edit_text = AsyncMock()
+
+    # Normal success
+    await safe_answer(mock_cb, "ok")
+    mock_cb.answer.assert_awaited_once_with("ok")
+
+    await safe_edit_text(mock_msg, "new text")
+    mock_msg.edit_text.assert_awaited_once_with("new text")
+
+    # Exceptions caught safely
+    mock_cb.answer.side_effect = RuntimeError("Stale query")
+    await safe_answer(mock_cb, "error")
+
+    mock_msg.edit_text.side_effect = RuntimeError("Cannot edit")
+    res = await safe_edit_text(mock_msg, "error")
+    assert res is None
+
+

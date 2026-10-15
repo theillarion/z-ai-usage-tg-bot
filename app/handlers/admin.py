@@ -15,6 +15,7 @@ from app.database import (
     share_account,
     unshare_account,
 )
+from app.handlers.utils import safe_answer, safe_edit_text
 from app.keyboards import (
     get_account_shares_management_kb,
     get_admin_menu_kb,
@@ -38,7 +39,7 @@ def _is_admin(user_id: int) -> bool:
 async def admin_menu_cb(callback: CallbackQuery):
     """Render main admin panel menu."""
     if not _is_admin(callback.from_user.id):
-        await callback.answer("Доступ запрещен.", show_alert=True)
+        await safe_answer(callback, "Доступ запрещен.", show_alert=True)
         return
 
     text = (
@@ -46,15 +47,15 @@ async def admin_menu_cb(callback: CallbackQuery):
         "Здесь вы можете управлять доступом пользователей к боту "
         "и распределять права на просмотр информации по токенам."
     )
-    await callback.message.edit_text(text, reply_markup=get_admin_menu_kb(), parse_mode="HTML")
-    await callback.answer()
+    await safe_edit_text(callback.message, text, reply_markup=get_admin_menu_kb(), parse_mode="HTML")
+    await safe_answer(callback)
 
 
 @router.callback_query(F.data == "admin_users")
 async def admin_users_cb(callback: CallbackQuery):
     """List all users for admin review."""
     if not _is_admin(callback.from_user.id):
-        await callback.answer("Доступ запрещен.", show_alert=True)
+        await safe_answer(callback, "Доступ запрещен.", show_alert=True)
         return
 
     users = get_all_users()
@@ -64,8 +65,35 @@ async def admin_users_cb(callback: CallbackQuery):
         "⏳ — Ожидает одобрения\n\n"
         "Выберите пользователя для настройки:"
     )
-    await callback.message.edit_text(text, reply_markup=get_admin_users_kb(users), parse_mode="HTML")
-    await callback.answer()
+    await safe_edit_text(callback.message, text, reply_markup=get_admin_users_kb(users), parse_mode="HTML")
+    await safe_answer(callback)
+
+
+def _is_notification_message(callback: CallbackQuery) -> bool:
+    """Check if the callback came from the new user notification message rather than admin panel."""
+    msg = callback.message
+    if not msg or not getattr(msg, "reply_markup", None):
+        return False
+    # In admin user detail card, there is a button '🔙 К списку пользователей' (callback_data='admin_users')
+    for row in getattr(msg.reply_markup, "inline_keyboard", []):
+        for btn in row:
+            if getattr(btn, "callback_data", None) == "admin_users":
+                return False
+    return True
+
+
+async def _update_notification_message(callback: CallbackQuery, target: Dict[str, Any], is_approved: bool):
+    """Update notification message with final status and remove inline buttons."""
+    target_id = target["user_id"]
+    uname_str = f"@{target['username']}" if target.get("username") else "нет"
+    action_text = "✅ <b>Доступ одобрен администратором!</b>" if is_approved else "❌ <b>Заявка отклонена администратором.</b>"
+    text = (
+        f"🔔 <b>Запрос на доступ к боту</b>\n\n"
+        f"👤 <b>Пользователь:</b> {target.get('first_name') or 'Без имени'} ({uname_str})\n"
+        f"🆔 <code>{target_id}</code>\n\n"
+        f"{action_text}"
+    )
+    await safe_edit_text(callback.message, text, reply_markup=None, parse_mode="HTML")
 
 
 async def _render_user_card(callback: CallbackQuery, target: Dict[str, Any]):
@@ -81,46 +109,46 @@ async def _render_user_card(callback: CallbackQuery, target: Dict[str, Any]):
         f"📊 <b>Статус:</b> {status_str}\n"
     )
     kb = get_admin_user_detail_kb(target_id, is_approved)
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await safe_edit_text(callback.message, text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("adm_usr_"))
 async def admin_user_detail_cb(callback: CallbackQuery):
     """Show details for selected user with toggle button."""
     if not _is_admin(callback.from_user.id):
-        await callback.answer("Доступ запрещен.", show_alert=True)
+        await safe_answer(callback, "Доступ запрещен.", show_alert=True)
         return
 
     target_id = int(callback.data.split("_")[2])
     target = get_user(target_id)
     if not target:
-        await callback.answer("Пользователь не найден", show_alert=True)
+        await safe_answer(callback, "Пользователь не найден", show_alert=True)
         return
 
     await _render_user_card(callback, target)
-    try:
-        await callback.answer()
-    except Exception:
-        pass
+    await safe_answer(callback)
 
 
 @router.callback_query(F.data.startswith("adm_appr_"))
 async def admin_approve_cb(callback: CallbackQuery, bot: Bot):
     """Approve a user's access request."""
     if not _is_admin(callback.from_user.id):
-        await callback.answer("Доступ запрещен.", show_alert=True)
+        await safe_answer(callback, "Доступ запрещен.", show_alert=True)
         return
 
     target_id = int(callback.data.split("_")[2])
     target = get_user(target_id)
     if not target:
-        await callback.answer("Пользователь не найден", show_alert=True)
+        await safe_answer(callback, "Пользователь не найден", show_alert=True)
         return
 
     # Anti-spam / idempotency: do not notify again if already approved
     if target["is_approved"]:
-        await callback.answer("Пользователь уже одобрен.")
-        await _render_user_card(callback, target)
+        await safe_answer(callback, "Пользователь уже одобрен.")
+        if _is_notification_message(callback):
+            await _update_notification_message(callback, target, True)
+        else:
+            await _render_user_card(callback, target)
         return
 
     set_user_approval(target_id, 1)
@@ -134,28 +162,35 @@ async def admin_approve_cb(callback: CallbackQuery, bot: Bot):
     except Exception:
         pass
 
-    await callback.answer("Доступ одобрен!")
+    await safe_answer(callback, "Доступ одобрен!")
     target["is_approved"] = True
-    await _render_user_card(callback, target)
+
+    if _is_notification_message(callback):
+        await _update_notification_message(callback, target, True)
+    else:
+        await _render_user_card(callback, target)
 
 
 @router.callback_query(F.data.startswith("adm_rejc_"))
 async def admin_reject_cb(callback: CallbackQuery, bot: Bot):
     """Revoke or reject a user's access."""
     if not _is_admin(callback.from_user.id):
-        await callback.answer("Доступ запрещен.", show_alert=True)
+        await safe_answer(callback, "Доступ запрещен.", show_alert=True)
         return
 
     target_id = int(callback.data.split("_")[2])
     target = get_user(target_id)
     if not target:
-        await callback.answer("Пользователь не найден", show_alert=True)
+        await safe_answer(callback, "Пользователь не найден", show_alert=True)
         return
 
     # Anti-spam / idempotency: do not notify again if already revoked/unapproved
     if not target["is_approved"]:
-        await callback.answer("Доступ пользователя уже закрыт.")
-        await _render_user_card(callback, target)
+        await safe_answer(callback, "Доступ пользователя уже закрыт.")
+        if _is_notification_message(callback):
+            await _update_notification_message(callback, target, False)
+        else:
+            await _render_user_card(callback, target)
         return
 
     set_user_approval(target_id, 0)
@@ -169,17 +204,20 @@ async def admin_reject_cb(callback: CallbackQuery, bot: Bot):
     except Exception:
         pass
 
-    await callback.answer("Доступ отозван!")
+    await safe_answer(callback, "Доступ отозван!")
     target["is_approved"] = False
-    await _render_user_card(callback, target)
 
+    if _is_notification_message(callback):
+        await _update_notification_message(callback, target, False)
+    else:
+        await _render_user_card(callback, target)
 
 
 @router.callback_query(F.data == "admin_shares")
 async def admin_shares_cb(callback: CallbackQuery):
     """List all accounts for token access management."""
     if not _is_admin(callback.from_user.id):
-        await callback.answer("Доступ запрещен.", show_alert=True)
+        await safe_answer(callback, "Доступ запрещен.", show_alert=True)
         return
 
     accounts = get_accounts(None)
@@ -189,8 +227,8 @@ async def admin_shares_cb(callback: CallbackQuery):
         "могут просматривать его лимиты и настраивать свои алерты:\n\n"
         "🔒 <i>Сами Bearer-токены остаются строго скрытыми.</i>"
     )
-    await callback.message.edit_text(text, reply_markup=get_share_accounts_list_kb(accounts), parse_mode="HTML")
-    await callback.answer()
+    await safe_edit_text(callback.message, text, reply_markup=get_share_accounts_list_kb(accounts), parse_mode="HTML")
+    await safe_answer(callback)
 
 
 async def _render_account_shares(callback: CallbackQuery, acc_id: int):
@@ -199,12 +237,12 @@ async def _render_account_shares(callback: CallbackQuery, acc_id: int):
 
     has_access, is_owner = check_account_access(acc_id, user_id)
     if not (is_owner or _is_admin(user_id)):
-        await callback.answer("У вас нет прав на управление доступом к этому аккаунту", show_alert=True)
+        await safe_answer(callback, "У вас нет прав на управление доступом к этому аккаунту", show_alert=True)
         return
 
     acc = get_account_by_id(acc_id)
     if not acc:
-        await callback.answer("Аккаунт не найден", show_alert=True)
+        await safe_answer(callback, "Аккаунт не найден", show_alert=True)
         return
 
     shared_users = get_shared_users_for_account(acc_id)
@@ -226,11 +264,8 @@ async def _render_account_shares(callback: CallbackQuery, acc_id: int):
         text += "<i>Сейчас к этому аккаунту ни у кого нет доступа, кроме владельца.</i>\n"
 
     kb = get_account_shares_management_kb(acc_id, shared_users, bool(available_users))
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    try:
-        await callback.answer()
-    except Exception:
-        pass
+    await safe_edit_text(callback.message, text, reply_markup=kb, parse_mode="HTML")
+    await safe_answer(callback)
 
 
 @router.callback_query(F.data.startswith("accshare_"))
@@ -248,12 +283,12 @@ async def share_pick_user_cb(callback: CallbackQuery):
 
     has_access, is_owner = check_account_access(acc_id, user_id)
     if not (is_owner or _is_admin(user_id)):
-        await callback.answer("У вас нет прав", show_alert=True)
+        await safe_answer(callback, "У вас нет прав", show_alert=True)
         return
 
     acc = get_account_by_id(acc_id)
     if not acc:
-        await callback.answer("Аккаунт не найден", show_alert=True)
+        await safe_answer(callback, "Аккаунт не найден", show_alert=True)
         return
 
     shared_users = get_shared_users_for_account(acc_id)
@@ -262,13 +297,13 @@ async def share_pick_user_cb(callback: CallbackQuery):
     available_users = [u for u in all_users if u["user_id"] not in shared_uids and u["is_approved"]]
 
     if not available_users:
-        await callback.answer("Нет доступных пользователей для добавления", show_alert=True)
+        await safe_answer(callback, "Нет доступных пользователей для добавления", show_alert=True)
         return
 
     text = f"Кому выдать доступ к информации об аккаунте <b>{acc['name']}</b>?"
     kb = get_pick_user_to_share_kb(acc_id, available_users)
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    await callback.answer()
+    await safe_edit_text(callback.message, text, reply_markup=kb, parse_mode="HTML")
+    await safe_answer(callback)
 
 
 @router.callback_query(F.data.startswith("doshare_"))
@@ -281,12 +316,12 @@ async def do_share_account_cb(callback: CallbackQuery, bot: Bot):
 
     has_access, is_owner = check_account_access(acc_id, user_id)
     if not (is_owner or _is_admin(user_id)):
-        await callback.answer("У вас нет прав", show_alert=True)
+        await safe_answer(callback, "У вас нет прав", show_alert=True)
         return
 
     acc = get_account_by_id(acc_id)
     if not acc:
-        await callback.answer("Аккаунт не найден", show_alert=True)
+        await safe_answer(callback, "Аккаунт не найден", show_alert=True)
         return
 
     share_account(acc_id, target_uid)
@@ -301,7 +336,7 @@ async def do_share_account_cb(callback: CallbackQuery, bot: Bot):
     except Exception:
         pass
 
-    await callback.answer("Доступ успешно выдан!")
+    await safe_answer(callback, "Доступ успешно выдан!")
     await _render_account_shares(callback, acc_id)
 
 
@@ -315,12 +350,12 @@ async def unshare_account_cb(callback: CallbackQuery, bot: Bot):
 
     has_access, is_owner = check_account_access(acc_id, user_id)
     if not (is_owner or _is_admin(user_id)):
-        await callback.answer("У вас нет прав", show_alert=True)
+        await safe_answer(callback, "У вас нет прав", show_alert=True)
         return
 
     acc = get_account_by_id(acc_id)
     if not acc:
-        await callback.answer("Аккаунт не найден", show_alert=True)
+        await safe_answer(callback, "Аккаунт не найден", show_alert=True)
         return
 
     unshare_account(acc_id, target_uid)
@@ -334,6 +369,6 @@ async def unshare_account_cb(callback: CallbackQuery, bot: Bot):
     except Exception:
         pass
 
-    await callback.answer("Доступ отозван!")
+    await safe_answer(callback, "Доступ отозван!")
     await _render_account_shares(callback, acc_id)
 

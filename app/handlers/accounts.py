@@ -13,6 +13,7 @@ from app.database import (
     get_accounts,
 )
 from app.formatters import format_limits_text
+from app.handlers.utils import safe_answer, safe_edit_text
 from app.keyboards import (
     get_account_added_kb,
     get_account_view_kb,
@@ -43,14 +44,17 @@ async def add_acc_start(callback: CallbackQuery, state: FSMContext):
 @router.message(AddAccountFSM.token)
 async def add_acc_token(message: Message, state: FSMContext):
     """Validate submitted token, clean up message for privacy, and proceed to naming."""
-    token = message.text.strip()
-
     # Security: Delete message containing sensitive Bearer token from chat history
     try:
         await message.delete()
     except Exception:
         pass
 
+    if not message.text:
+        await message.answer("❌ Пожалуйста, отправьте текстовое сообщение с API-токеном.")
+        return
+
+    token = message.text.strip()
     if "…" in token or "\u2026" in token:
         await message.answer("❌ Ошибка: В токене есть многоточие. Скопируй ключ целиком!")
         return
@@ -77,9 +81,17 @@ async def add_acc_token(message: Message, state: FSMContext):
 @router.message(AddAccountFSM.name)
 async def add_acc_name(message: Message, state: FSMContext):
     """Save the named account associated with user_id."""
+    if not message.text:
+        await message.answer("❌ Пожалуйста, отправьте текстовое название аккаунта.")
+        return
+
     name = message.text.strip()
     data = await state.get_data()
-    token = data["token"]
+    token = data.get("token")
+    if not token:
+        await state.clear()
+        await message.answer("❌ Сессия добавления устарела. Начните заново через главное меню.")
+        return
 
     from_user = getattr(message, "from_user", None)
     user_id = getattr(from_user, "id", config.OWNER_ID) if from_user else config.OWNER_ID
@@ -92,24 +104,31 @@ async def add_acc_name(message: Message, state: FSMContext):
     )
 
 
-@router.callback_query(F.data == "list_accs")
-async def list_accs_cb(callback: CallbackQuery):
-    """List accessible accounts (owned + shared) or display empty state."""
+async def _render_accounts_list(callback: CallbackQuery):
+    """Render list of accessible accounts or empty state."""
     from_user = getattr(callback, "from_user", None)
     user_id = getattr(from_user, "id", None) if from_user else None
     accs = get_accounts(user_id=user_id)
     if not accs:
-        await callback.message.edit_text(
+        await safe_edit_text(
+            callback.message,
             "У вас пока нет добавленных аккаунтов.",
             reply_markup=get_empty_accounts_kb(),
         )
         return
 
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         "Ваши аккаунты:",
         reply_markup=get_accounts_list_kb(accs),
     )
-    await callback.answer()
+
+
+@router.callback_query(F.data == "list_accs")
+async def list_accs_cb(callback: CallbackQuery):
+    """List accessible accounts (owned + shared) or display empty state."""
+    await _render_accounts_list(callback)
+    await safe_answer(callback)
 
 
 @router.callback_query(F.data.startswith("view_"))
@@ -121,16 +140,15 @@ async def view_acc_cb(callback: CallbackQuery):
 
     acc = get_account_by_id(acc_id)
     if not acc:
-        await callback.answer("Аккаунт не найден", show_alert=True)
+        await safe_answer(callback, "Аккаунт не найден", show_alert=True)
         return
 
     has_access, is_owner = check_account_access(acc_id, user_id)
     if not has_access:
-        await callback.answer("Доступ запрещен.", show_alert=True)
+        await safe_answer(callback, "Доступ запрещен.", show_alert=True)
         return
 
-
-    await callback.message.edit_text(f"🔄 Запрашиваю лимиты для '{acc['name']}'...")
+    await safe_edit_text(callback.message, f"🔄 Запрашиваю лимиты для '{acc['name']}'...")
 
     ok, data = check_token(acc["token"])
     is_admin = bool(config.OWNER_ID and user_id == config.OWNER_ID)
@@ -142,17 +160,18 @@ async def view_acc_cb(callback: CallbackQuery):
             await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         except Exception as e:
             if "message is not modified" in str(e).lower():
-                await callback.answer("Данные актуальны (без изменений)")
+                await safe_answer(callback, "Данные актуальны (без изменений)")
+                return
             else:
                 raise e
     else:
-        try:
-            await callback.message.edit_text(
-                f"❌ Ошибка получения лимитов для '{acc['name']}':\n{data}",
-                reply_markup=kb,
-            )
-        except Exception:
-            pass
+        await safe_edit_text(
+            callback.message,
+            f"❌ Ошибка получения лимитов для '{acc['name']}':\n{data}",
+            reply_markup=kb,
+        )
+
+    await safe_answer(callback)
 
 
 @router.callback_query(F.data.startswith("del_"))
@@ -166,10 +185,11 @@ async def del_acc_cb(callback: CallbackQuery):
     is_admin = bool(config.OWNER_ID and user_id == config.OWNER_ID)
 
     if not (is_owner or is_admin):
-        await callback.answer("У вас нет прав на удаление этого аккаунта", show_alert=True)
+        await safe_answer(callback, "У вас нет прав на удаление этого аккаунта", show_alert=True)
         return
 
     delete_account(acc_id)
-    await callback.answer("Удалено!")
-    await list_accs_cb(callback)
+    await safe_answer(callback, "Удалено!")
+    await _render_accounts_list(callback)
+
 

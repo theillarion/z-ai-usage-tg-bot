@@ -21,3 +21,10 @@ def get_main_router() -> Router:
     main_router._parent_router = None
     return main_router
 
+
+from app.handlers.utils import safe_answer, safe_edit_text
+
+__all__ = ["get_main_router", "safe_answer", "safe_edit_text"]
+
+
+

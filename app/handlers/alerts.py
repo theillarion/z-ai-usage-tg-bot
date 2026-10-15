@@ -12,6 +12,7 @@ from app.database import (
     get_account_by_id,
     get_alerts_by_account,
 )
+from app.handlers.utils import safe_answer, safe_edit_text
 from app.keyboards import (
     get_add_alert_menu_kb,
     get_alert_saved_kb,
@@ -23,20 +24,20 @@ from app.states import CustomAlertFSM
 router = Router(name="alerts")
 
 
-async def _render_account_alerts(callback: CallbackQuery, acc_id: int):
+async def _render_account_alerts(callback: CallbackQuery, acc_id: int) -> bool:
     """Render list of alerts configured by current user for the selected account."""
     from_user = getattr(callback, "from_user", None)
     user_id = getattr(from_user, "id", config.OWNER_ID) if from_user else config.OWNER_ID
 
     acc = get_account_by_id(acc_id)
     if not acc:
-        await callback.answer("Аккаунт не найден", show_alert=True)
-        return
+        await safe_answer(callback, "Аккаунт не найден", show_alert=True)
+        return False
 
     has_access, _ = check_account_access(acc_id, user_id)
     if not has_access:
-        await callback.answer("Доступ запрещен.", show_alert=True)
-        return
+        await safe_answer(callback, "Доступ запрещен.", show_alert=True)
+        return False
 
     alerts = get_alerts_by_account(acc_id, user_id=user_id)
     text = f"🔔 <b>Настройки алертов для аккаунта:</b> {acc['name']}\n\n"
@@ -55,18 +56,16 @@ async def _render_account_alerts(callback: CallbackQuery, acc_id: int):
             text += f"{idx}. {rule_str}\n"
 
     kb = get_alerts_list_kb(acc_id, alerts)
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    try:
-        await callback.answer()
-    except Exception:
-        pass
+    await safe_edit_text(callback.message, text, reply_markup=kb, parse_mode="HTML")
+    return True
 
 
 @router.callback_query(F.data.startswith("alerts_"))
 async def acc_alerts_cb(callback: CallbackQuery):
     """Render list of alerts configured by current user for the selected account."""
     acc_id = int(callback.data.split("_")[1])
-    await _render_account_alerts(callback, acc_id)
+    if await _render_account_alerts(callback, acc_id):
+        await safe_answer(callback)
 
 
 @router.callback_query(F.data.startswith("delalert_"))
@@ -76,7 +75,7 @@ async def del_alert_cb(callback: CallbackQuery):
     alert_id = int(parts[1])
     acc_id = int(parts[2])
     delete_alert(alert_id)
-    await callback.answer("Алерт удален!")
+    await safe_answer(callback, "Алерт удален!")
     await _render_account_alerts(callback, acc_id)
 
 
@@ -89,18 +88,18 @@ async def add_alert_menu_cb(callback: CallbackQuery):
 
     acc = get_account_by_id(acc_id)
     if not acc:
-        await callback.answer("Аккаунт не найден", show_alert=True)
+        await safe_answer(callback, "Аккаунт не найден", show_alert=True)
         return
 
     has_access, _ = check_account_access(acc_id, user_id)
     if not has_access:
-        await callback.answer("Доступ запрещен.", show_alert=True)
+        await safe_answer(callback, "Доступ запрещен.", show_alert=True)
         return
 
     text = f"➕ <b>Выберите тип алерта для:</b> {acc['name']}"
     kb = get_add_alert_menu_kb(acc_id)
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    await callback.answer()
+    await safe_edit_text(callback.message, text, reply_markup=kb, parse_mode="HTML")
+    await safe_answer(callback)
 
 
 @router.callback_query(F.data.startswith("setalt_"))
@@ -117,9 +116,8 @@ async def set_alert_preset_cb(callback: CallbackQuery):
     from_user = getattr(callback, "from_user", None)
     user_id = getattr(from_user, "id", config.OWNER_ID) if from_user else config.OWNER_ID
     add_alert(acc_id, alert_type, unit, pct, user_id=user_id)
-    await callback.answer("Алерт успешно добавлен!")
+    await safe_answer(callback, "Алерт успешно добавлен!")
     await _render_account_alerts(callback, acc_id)
-
 
 
 @router.callback_query(F.data.startswith("customunit_"))
@@ -128,8 +126,8 @@ async def custom_unit_choice_cb(callback: CallbackQuery):
     acc_id = int(callback.data.split("_")[1])
     text = "Для какого лимита настроить порог срабатывания?"
     kb = get_custom_unit_choice_kb(acc_id)
-    await callback.message.edit_text(text, reply_markup=kb)
-    await callback.answer()
+    await safe_edit_text(callback.message, text, reply_markup=kb)
+    await safe_answer(callback)
 
 
 @router.callback_query(F.data.startswith("customchoose_"))
@@ -143,18 +141,26 @@ async def custom_choose_cb(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CustomAlertFSM.pct)
 
     unit_str = "5-часового" if unit == 3 else "недельного"
-    await callback.message.answer(
-        f"Введите процент использования для <b>{unit_str} лимита</b> (число от 1 до 99):\n"
-        f"Например: <code>70</code>\n\n"
-        f"<i>Для отмены отправьте /cancel</i>",
-        parse_mode="HTML",
-    )
-    await callback.answer()
+    try:
+        await callback.message.answer(
+            f"Введите процент использования для <b>{unit_str} лимита</b> (число от 1 до 99):\n"
+            f"Например: <code>70</code>\n\n"
+            f"<i>Для отмены отправьте /cancel</i>",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+    await safe_answer(callback)
+
 
 
 @router.message(CustomAlertFSM.pct)
 async def custom_alert_pct_input(message: Message, state: FSMContext):
     """Validate user input percentage and create custom threshold alert."""
+    if not message.text:
+        await message.answer("❌ Пожалуйста, отправьте число от 1 до 99.")
+        return
+
     text = message.text.strip().replace("%", "")
     try:
         pct = float(text)
@@ -165,14 +171,17 @@ async def custom_alert_pct_input(message: Message, state: FSMContext):
         return
 
     data = await state.get_data()
-    acc_id = data["acc_id"]
-    unit = data["unit"]
+    acc_id = data.get("acc_id")
+    unit = data.get("unit")
+    if not acc_id or not unit:
+        await state.clear()
+        await message.answer("❌ Сессия настройки алерта устарела. Начните заново через список аккаунтов.")
+        return
 
     from_user = getattr(message, "from_user", None)
     user_id = getattr(from_user, "id", config.OWNER_ID) if from_user else config.OWNER_ID
     add_alert(acc_id, "threshold", unit, pct, user_id=user_id)
     await state.clear()
-
 
     unit_str = "5-часового" if unit == 3 else "недельного"
     pct_display = int(pct) if pct.is_integer() else pct

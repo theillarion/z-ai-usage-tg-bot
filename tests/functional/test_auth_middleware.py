@@ -117,3 +117,28 @@ async def test_auth_middleware_no_user():
     result = await middleware(mock_handler, mock_event, data)
     assert result == "no_user_ok"
     mock_handler.assert_awaited_once_with(mock_event, data)
+
+
+@pytest.mark.asyncio
+async def test_auth_middleware_bot_send_exception(tmp_db_path, monkeypatch, mock_bot):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    owner_id = 12345
+    new_user_id = 77777
+
+    mock_bot.send_message.side_effect = RuntimeError("Telegram network error")
+
+    middleware = AuthMiddleware(owner_id=owner_id)
+    mock_handler = AsyncMock()
+    mock_msg = MagicMock(spec=Message)
+    mock_msg.answer = AsyncMock()
+
+    mock_user = MagicMock(spec=User)
+    mock_user.id = new_user_id
+    mock_user.username = None
+    mock_user.first_name = None
+
+    data = {"event_from_user": mock_user, "bot": mock_bot}
+    result = await middleware(mock_handler, mock_msg, data)
+    assert result is None
+    mock_msg.answer.assert_awaited_once()
+

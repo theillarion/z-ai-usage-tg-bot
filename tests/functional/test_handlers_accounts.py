@@ -290,3 +290,118 @@ async def test_del_acc_cb_unauthorized(tmp_db_path, monkeypatch):
     await del_acc_cb(mock_cb)
     mock_cb.answer.assert_awaited_with("У вас нет прав на удаление этого аккаунта", show_alert=True)
 
+
+@pytest.mark.asyncio
+async def test_add_acc_token_non_text(mock_fsm_context):
+    await mock_fsm_context.set_state(AddAccountFSM.token)
+    mock_msg = MagicMock(spec=Message)
+    mock_msg.text = None
+    mock_msg.answer = AsyncMock()
+    mock_msg.delete = AsyncMock()
+
+    await add_acc_token(mock_msg, mock_fsm_context)
+    mock_msg.answer.assert_awaited_with("❌ Пожалуйста, отправьте текстовое сообщение с API-токеном.")
+
+
+@pytest.mark.asyncio
+async def test_add_acc_name_non_text(mock_fsm_context):
+    await mock_fsm_context.set_state(AddAccountFSM.name)
+    mock_msg = MagicMock(spec=Message)
+    mock_msg.text = None
+    mock_msg.answer = AsyncMock()
+
+    await add_acc_name(mock_msg, mock_fsm_context)
+    mock_msg.answer.assert_awaited_with("❌ Пожалуйста, отправьте текстовое название аккаунта.")
+
+
+@pytest.mark.asyncio
+async def test_add_acc_name_expired_session(mock_fsm_context):
+    await mock_fsm_context.set_state(AddAccountFSM.name)
+    mock_msg = MagicMock(spec=Message)
+    mock_msg.text = "MyAccount"
+    mock_msg.answer = AsyncMock()
+
+    await add_acc_name(mock_msg, mock_fsm_context)
+    mock_msg.answer.assert_awaited_with("❌ Сессия добавления устарела. Начните заново через главное меню.")
+    assert await mock_fsm_context.get_state() is None
+
+
+@pytest.mark.asyncio
+async def test_view_acc_cb_message_not_modified(tmp_db_path, monkeypatch):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+
+    acc_id = add_account("OwnerAcc", "tok", user_id=111, db_path=tmp_db_path)
+
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.data = f"view_{acc_id}"
+    mock_cb.from_user = MagicMock()
+    mock_cb.from_user.id = 111
+    mock_cb.message = MagicMock(spec=Message)
+    mock_cb.message.edit_text = AsyncMock(side_effect=Exception("Bad Request: message is not modified"))
+    mock_cb.answer = AsyncMock()
+
+    with patch("app.handlers.accounts.check_token", return_value=(True, {"limits": []})):
+        await view_acc_cb(mock_cb)
+
+    mock_cb.answer.assert_any_await("Данные актуальны (без изменений)")
+
+
+@pytest.mark.asyncio
+async def test_view_acc_cb_api_error(tmp_db_path, monkeypatch):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+
+    acc_id = add_account("OwnerAcc", "tok", user_id=111, db_path=tmp_db_path)
+
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.data = f"view_{acc_id}"
+    mock_cb.from_user = MagicMock()
+    mock_cb.from_user.id = 111
+    mock_cb.message = MagicMock(spec=Message)
+    mock_cb.message.edit_text = AsyncMock()
+    mock_cb.answer = AsyncMock()
+
+    with patch("app.handlers.accounts.check_token", return_value=(False, "Unauthorized")):
+        await view_acc_cb(mock_cb)
+
+    assert mock_cb.message.edit_text.await_count >= 1
+    mock_cb.answer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_view_acc_cb_other_exception(tmp_db_path, monkeypatch):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+
+    acc_id = add_account("OwnerAcc", "tok", user_id=111, db_path=tmp_db_path)
+
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.data = f"view_{acc_id}"
+    mock_cb.from_user = MagicMock()
+    mock_cb.from_user.id = 111
+    mock_cb.message = MagicMock(spec=Message)
+    mock_cb.message.edit_text = AsyncMock(side_effect=RuntimeError("Fatal Telegram crash"))
+
+    with patch("app.handlers.accounts.check_token", return_value=(True, {"limits": []})):
+        with pytest.raises(RuntimeError):
+            await view_acc_cb(mock_cb)
+
+
+@pytest.mark.asyncio
+async def test_render_accounts_list_edit_exception(tmp_db_path, monkeypatch):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.from_user = MagicMock(id=111)
+    mock_cb.message = MagicMock(spec=Message)
+    mock_cb.message.edit_text = AsyncMock(side_effect=RuntimeError("Cannot edit"))
+    mock_cb.answer = AsyncMock()
+
+    # Empty list edit fails gracefully
+    await list_accs_cb(mock_cb)
+
+    # Non-empty list edit fails gracefully
+    add_account("TestAcc", "tok", user_id=111, db_path=tmp_db_path)
+    await list_accs_cb(mock_cb)
+
+

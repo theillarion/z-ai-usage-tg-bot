@@ -91,7 +91,12 @@ async def check_alerts_job(
         if not acc:
             continue
 
-        ok, data = check_token(acc["token"])
+        try:
+            ok, data = check_token(acc["token"])
+        except Exception as e:
+            logging.error(f"Error checking token for account {acc_id}: {e}")
+            continue
+
         if not ok or not data:
             continue
 

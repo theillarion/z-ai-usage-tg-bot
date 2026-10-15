@@ -126,7 +126,54 @@ async def test_admin_approve_and_reject(tmp_db_path, monkeypatch, mock_bot):
     await admin_reject_cb(cb_rejc_missing, mock_bot)
     cb_rejc_missing.answer.assert_awaited_with("Пользователь не найден", show_alert=True)
 
+    # Second click on Reject inside admin user card (not notification)
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    cb_rejc_dup = _make_cb(111, "adm_rejc_222")
+    cb_rejc_dup.message.reply_markup = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="К списку", callback_data="admin_users")]]
+    )
+    await admin_reject_cb(cb_rejc_dup, mock_bot)
+    cb_rejc_dup.answer.assert_awaited_with("Доступ пользователя уже закрыт.")
+    cb_rejc_dup.message.edit_text.assert_awaited_once()
 
+
+@pytest.mark.asyncio
+async def test_admin_handlers_unauthorized(tmp_db_path, monkeypatch, mock_bot):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+
+    # Guest user 222 (not admin)
+    cb_usr = _make_cb(222, "admin_users")
+    await admin_users_cb(cb_usr)
+    cb_usr.answer.assert_awaited_with("Доступ запрещен.", show_alert=True)
+
+    cb_dtl = _make_cb(222, "adm_usr_123")
+    await admin_user_detail_cb(cb_dtl)
+    cb_dtl.answer.assert_awaited_with("Доступ запрещен.", show_alert=True)
+
+    cb_appr = _make_cb(222, "adm_appr_123")
+    await admin_approve_cb(cb_appr, mock_bot)
+    cb_appr.answer.assert_awaited_with("Доступ запрещен.", show_alert=True)
+
+    cb_rejc = _make_cb(222, "adm_rejc_123")
+    await admin_reject_cb(cb_rejc, mock_bot)
+    cb_rejc.answer.assert_awaited_with("Доступ запрещен.", show_alert=True)
+
+    cb_shares = _make_cb(222, "admin_shares")
+    await admin_shares_cb(cb_shares)
+    cb_shares.answer.assert_awaited_with("Доступ запрещен.", show_alert=True)
+
+    cb_sharepick = _make_cb(222, "sharepick_123")
+    await share_pick_user_cb(cb_sharepick)
+    cb_sharepick.answer.assert_awaited_with("У вас нет прав", show_alert=True)
+
+    cb_doshare = _make_cb(222, "doshare_123_456")
+    await do_share_account_cb(cb_doshare, mock_bot)
+    cb_doshare.answer.assert_awaited_with("У вас нет прав", show_alert=True)
+
+    cb_unshare = _make_cb(222, "unshare_123_456")
+    await unshare_account_cb(cb_unshare, mock_bot)
+    cb_unshare.answer.assert_awaited_with("У вас нет прав", show_alert=True)
 
 
 @pytest.mark.asyncio
@@ -288,14 +335,19 @@ async def test_admin_share_missing_account_and_exceptions(tmp_db_path, monkeypat
 async def test_frozen_callback_query_compatibility(tmp_db_path, monkeypatch, mock_bot):
     """Ensure handlers work with frozen Pydantic v2 CallbackQuery models without mutating cb.data."""
     from datetime import datetime
-    from aiogram.types import Chat
+    from aiogram.types import Chat, InlineKeyboardButton, InlineKeyboardMarkup
 
     monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
     monkeypatch.setattr("app.config.config.OWNER_ID", 111)
 
     upsert_user(333, "frozen_user", "Frozen", is_approved=0, db_path=tmp_db_path)
 
-    # Real frozen CallbackQuery
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 К списку пользователей", callback_data="admin_users")]
+        ]
+    )
+
     real_cb = CallbackQuery(
         id="cb_real_1",
         from_user=User(id=111, is_bot=False, first_name="Owner"),
@@ -305,10 +357,10 @@ async def test_frozen_callback_query_compatibility(tmp_db_path, monkeypatch, moc
             message_id=999,
             date=datetime.now(),
             chat=Chat(id=111, type="private"),
-            text="🔔 Новый запрос на доступ к боту!",
+            text="User details",
+            reply_markup=kb,
         ),
     )
-    # Mock methods using object.__setattr__ to bypass Pydantic frozen check
     answer_mock = AsyncMock()
     edit_mock = AsyncMock()
     object.__setattr__(real_cb, "answer", answer_mock)
@@ -318,6 +370,110 @@ async def test_frozen_callback_query_compatibility(tmp_db_path, monkeypatch, moc
     assert get_user(333, db_path=tmp_db_path)["is_approved"] is True
     edit_mock.assert_awaited_once()
     assert "✅ Одобрен" in edit_mock.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_notification_message_approval_and_rejection_removes_keyboard(tmp_db_path, monkeypatch, mock_bot):
+    """Verify that approving/rejecting from a new user notification removes buttons completely."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+
+    upsert_user(444, "new_applicant", "Applicant", is_approved=0, db_path=tmp_db_path)
+
+    notif_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Одобрить", callback_data="adm_appr_444"),
+                InlineKeyboardButton(text="❌ Отклонить", callback_data="adm_rejc_444"),
+            ]
+        ]
+    )
+
+    # 1. Approve from notification
+    cb = _make_cb(111, "adm_appr_444")
+    cb.message.reply_markup = notif_kb
+    await admin_approve_cb(cb, mock_bot)
+
+    cb.message.edit_text.assert_awaited_once()
+    _, kwargs = cb.message.edit_text.call_args
+    assert kwargs.get("reply_markup") is None
+    assert "Доступ одобрен администратором!" in cb.message.edit_text.call_args[0][0]
+    assert get_user(444, db_path=tmp_db_path)["is_approved"] is True
+
+    # 2. Duplicate approve on notification (idempotency: buttons still removed, no spam)
+    cb.message.edit_text.reset_mock()
+    mock_bot.send_message.reset_mock()
+    await admin_approve_cb(cb, mock_bot)
+    mock_bot.send_message.assert_not_awaited()
+    cb.message.edit_text.assert_awaited_once()
+    _, kwargs = cb.message.edit_text.call_args
+    assert kwargs.get("reply_markup") is None
+
+    # 3. Reject from notification
+    upsert_user(555, "another_applicant", "Applicant2", is_approved=1, db_path=tmp_db_path)
+    cb_rejc = _make_cb(111, "adm_rejc_555")
+    cb_rejc.message.reply_markup = notif_kb
+    await admin_reject_cb(cb_rejc, mock_bot)
+
+    cb_rejc.message.edit_text.assert_awaited_once()
+    _, kwargs = cb_rejc.message.edit_text.call_args
+    assert kwargs.get("reply_markup") is None
+    assert "Заявка отклонена администратором." in cb_rejc.message.edit_text.call_args[0][0]
+    assert get_user(555, db_path=tmp_db_path)["is_approved"] is False
+
+    # 4. Duplicate reject on notification
+    cb_rejc.message.edit_text.reset_mock()
+    mock_bot.send_message.reset_mock()
+    await admin_reject_cb(cb_rejc, mock_bot)
+    mock_bot.send_message.assert_not_awaited()
+    cb_rejc.message.edit_text.assert_awaited_once()
+    _, kwargs = cb_rejc.message.edit_text.call_args
+    assert kwargs.get("reply_markup") is None
+
+
+@pytest.mark.asyncio
+async def test_share_pick_user_no_available(tmp_db_path, monkeypatch):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+
+    acc_id = add_account("OwnerAcc", "tok", user_id=111, db_path=tmp_db_path)
+    # No other approved users
+    cb = _make_cb(111, f"sharepick_{acc_id}")
+    await share_pick_user_cb(cb)
+    cb.answer.assert_awaited_with("Нет доступных пользователей для добавления", show_alert=True)
+
+
+@pytest.mark.asyncio
+async def test_share_pick_user_missing_acc(tmp_db_path, monkeypatch):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+
+    cb = _make_cb(111, "sharepick_9999")
+    await share_pick_user_cb(cb)
+    cb.answer.assert_awaited_with("Аккаунт не найден", show_alert=True)
+
+
+@pytest.mark.asyncio
+async def test_do_share_missing_acc(tmp_db_path, monkeypatch, mock_bot):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+
+    cb = _make_cb(111, "doshare_9999_222")
+    await do_share_account_cb(cb, mock_bot)
+    cb.answer.assert_awaited_with("Аккаунт не найден", show_alert=True)
+
+
+@pytest.mark.asyncio
+async def test_unshare_missing_acc(tmp_db_path, monkeypatch, mock_bot):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+
+    cb = _make_cb(111, "unshare_9999_222")
+    await unshare_account_cb(cb, mock_bot)
+    cb.answer.assert_awaited_with("Аккаунт не найден", show_alert=True)
+
 
 
 

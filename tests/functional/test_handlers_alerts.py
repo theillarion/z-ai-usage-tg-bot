@@ -167,6 +167,19 @@ async def test_custom_choose_cb(mock_fsm_context):
 
 
 @pytest.mark.asyncio
+async def test_custom_choose_cb_answer_exception(mock_fsm_context):
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.data = "customchoose_42_3"
+    mock_cb.message = MagicMock(spec=Message)
+    mock_cb.message.answer = AsyncMock(side_effect=RuntimeError("Cannot send message"))
+    mock_cb.answer = AsyncMock()
+
+    await custom_choose_cb(mock_cb, mock_fsm_context)
+    mock_cb.answer.assert_awaited_once()
+
+
+
+@pytest.mark.asyncio
 async def test_custom_alert_pct_input_invalid(mock_fsm_context):
     await mock_fsm_context.set_state(CustomAlertFSM.pct)
     mock_msg = MagicMock(spec=Message)
@@ -244,4 +257,70 @@ async def test_add_alert_menu_cb_unauthorized(tmp_db_path, monkeypatch):
 
     await add_alert_menu_cb(mock_cb)
     mock_cb.answer.assert_awaited_with("Доступ запрещен.", show_alert=True)
+
+
+@pytest.mark.asyncio
+async def test_add_alert_menu_cb_not_found(tmp_db_path, monkeypatch):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.data = "addalert_9999"
+    mock_cb.answer = AsyncMock()
+
+    await add_alert_menu_cb(mock_cb)
+    mock_cb.answer.assert_awaited_with("Аккаунт не найден", show_alert=True)
+
+
+@pytest.mark.asyncio
+async def test_custom_alert_pct_input_non_text(mock_fsm_context):
+    await mock_fsm_context.set_state(CustomAlertFSM.pct)
+    mock_msg = MagicMock(spec=Message)
+    mock_msg.text = None
+    mock_msg.answer = AsyncMock()
+
+    await custom_alert_pct_input(mock_msg, mock_fsm_context)
+    mock_msg.answer.assert_awaited_with("❌ Пожалуйста, отправьте число от 1 до 99.")
+
+
+@pytest.mark.asyncio
+async def test_custom_alert_pct_input_expired_state(mock_fsm_context):
+    await mock_fsm_context.set_state(CustomAlertFSM.pct)
+    mock_msg = MagicMock(spec=Message)
+    mock_msg.text = "80"
+    mock_msg.answer = AsyncMock()
+
+    await custom_alert_pct_input(mock_msg, mock_fsm_context)
+    mock_msg.answer.assert_awaited_with("❌ Сессия настройки алерта устарела. Начните заново через список аккаунтов.")
+    assert await mock_fsm_context.get_state() is None
+
+
+@pytest.mark.asyncio
+async def test_set_alert_preset_cb_burn_rate(tmp_db_path, monkeypatch):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    acc_id = add_account("BurnAcc", "token", tmp_db_path)
+
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.data = f"setalt_{acc_id}_burn_3_50"
+    mock_cb.message = MagicMock(spec=Message)
+    mock_cb.message.edit_text = AsyncMock()
+    mock_cb.answer = AsyncMock()
+
+    await set_alert_preset_cb(mock_cb)
+    mock_cb.answer.assert_any_await("Алерт успешно добавлен!")
+    alerts = get_alerts_by_account(acc_id, tmp_db_path)
+    assert len(alerts) == 1
+    assert alerts[0]["alert_type"] == "burn_rate"
+
+
+@pytest.mark.asyncio
+async def test_custom_unit_choice_cb():
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.data = "customunit_42"
+    mock_cb.message = MagicMock(spec=Message)
+    mock_cb.message.edit_text = AsyncMock()
+    mock_cb.answer = AsyncMock()
+
+    await custom_unit_choice_cb(mock_cb)
+    mock_cb.message.edit_text.assert_awaited_once()
+    mock_cb.answer.assert_awaited_once()
+
 

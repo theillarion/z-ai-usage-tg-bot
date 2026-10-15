@@ -1,5 +1,6 @@
 """Unit tests for app/services/alerts.py evaluate_alert logic."""
 
+import pytest
 from app.services.alerts import evaluate_alert
 
 
@@ -82,3 +83,19 @@ def test_evaluate_alert_missing_limit_unit():
 
     triggered, _, _, _, _ = evaluate_alert(alert, limits, now_ms=1770000000000)
     assert triggered is False
+
+
+@pytest.mark.asyncio
+async def test_check_alerts_job_token_exception(tmp_db_path, monkeypatch, mock_bot):
+    from unittest.mock import patch
+    from app.database import add_account, add_alert
+    from app.services.alerts import check_alerts_job
+
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    acc_id = add_account("FaultyAcc", "bad_token", tmp_db_path)
+    add_alert(acc_id, "threshold", 3, 50.0, tmp_db_path)
+
+    with patch("app.services.alerts.check_token", side_effect=RuntimeError("Network explosion")):
+        triggered = await check_alerts_job(mock_bot, owner_id=111, db_path=tmp_db_path)
+        assert triggered == 0
+

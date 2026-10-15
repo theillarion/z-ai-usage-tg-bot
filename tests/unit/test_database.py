@@ -21,6 +21,29 @@ def test_init_db_idempotent(tmp_db_path):
     assert get_accounts(tmp_db_path) == []
 
 
+def test_init_db_migration_and_owner(tmp_path, monkeypatch):
+    import sqlite3
+    from app.config import config
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+    db_file = str(tmp_path / "migration_bot.db")
+
+    # Create old schema table without user_id
+    with sqlite3.connect(db_file) as conn:
+        c = conn.cursor()
+        c.execute("""CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT, token TEXT, created_at TIMESTAMP)""")
+        c.execute("""CREATE TABLE alerts (id INTEGER PRIMARY KEY, account_id INTEGER, alert_type TEXT, limit_unit INTEGER, threshold_pct REAL, last_triggered_reset_time INTEGER)""")
+        c.execute("INSERT INTO accounts (name, token) VALUES ('OldAcc', 'old_tok')")
+        c.execute("INSERT INTO alerts (account_id, alert_type, limit_unit, threshold_pct) VALUES (1, 'threshold', 3, 80)")
+        conn.commit()
+
+    init_db(db_file)
+    accs = get_accounts(db_file)
+    assert len(accs) == 1
+    assert accs[0]["user_id"] == 111
+
+
+
+
 def test_accounts_crud(tmp_db_path):
     acc1_id = add_account("First", "token_123", tmp_db_path)
     acc2_id = add_account("Second", "token_456", tmp_db_path)
