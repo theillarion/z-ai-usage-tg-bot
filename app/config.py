@@ -1,6 +1,7 @@
 """Configuration management for Z.ai Usage Telegram Bot."""
 
 import os
+from typing import Optional
 from dataclasses import dataclass
 
 
@@ -14,6 +15,8 @@ class Config:
     ALERT_WORKER_INITIAL_DELAY: int = 10
     VERSION: str = "v2.2 (Alerts & Notifications)"
     REPO_URL: str = "https://github.com/theillarion/z-ai-usage-tg-bot"
+    TELEGRAM_PROXY: Optional[str] = None
+    TELEGRAM_API_SERVER: Optional[str] = None
 
 
 def load_config() -> Config:
@@ -48,6 +51,11 @@ def load_config() -> Config:
     except ValueError:
         initial_delay = 10
 
+    telegram_proxy = os.getenv("TELEGRAM_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+    if telegram_proxy:
+        telegram_proxy = telegram_proxy.strip()
+    telegram_api_server = os.getenv("TELEGRAM_API_SERVER", "").strip() or None
+
     return Config(
         BOT_TOKEN=bot_token,
         OWNER_ID=owner_id,
@@ -55,7 +63,10 @@ def load_config() -> Config:
         DB_PATH=db_path,
         ALERT_CHECK_INTERVAL=check_interval,
         ALERT_WORKER_INITIAL_DELAY=initial_delay,
+        TELEGRAM_PROXY=telegram_proxy,
+        TELEGRAM_API_SERVER=telegram_api_server,
     )
+
 
 
 # Default config singleton

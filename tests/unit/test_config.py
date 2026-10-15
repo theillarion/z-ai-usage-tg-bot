@@ -64,3 +64,13 @@ def test_load_config_makedirs_oserror(monkeypatch):
             cfg = load_config()
             assert cfg.DB_DIR == "./data"
 
+
+def test_load_config_proxy_and_api_server(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_PROXY", "socks5://127.0.0.1:9050")
+    monkeypatch.setenv("TELEGRAM_API_SERVER", "https://custom.api.telegram.org")
+
+    cfg = load_config()
+    assert cfg.TELEGRAM_PROXY == "socks5://127.0.0.1:9050"
+    assert cfg.TELEGRAM_API_SERVER == "https://custom.api.telegram.org"
+
+

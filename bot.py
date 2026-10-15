@@ -27,10 +27,32 @@ from app.zai_client import check_token
 BOT_TOKEN = config.BOT_TOKEN
 OWNER_ID = config.OWNER_ID
 
+from typing import Optional
+
 # Module-level instances for backward compatibility
 router = get_main_router()
 dp = create_dispatcher(OWNER_ID)
-bot: Bot = create_bot(BOT_TOKEN) if BOT_TOKEN else None
+
+_bot_instance: Optional[Bot] = None
+
+
+def get_bot() -> Optional[Bot]:
+    """Lazy bot instantiator to avoid unclosed sessions on module import."""
+    global _bot_instance
+    if _bot_instance is None and BOT_TOKEN:
+        _bot_instance = create_bot(
+            BOT_TOKEN,
+            proxy=config.TELEGRAM_PROXY,
+            api_server=config.TELEGRAM_API_SERVER,
+        )
+    return _bot_instance
+
+
+def __getattr__(name: str):
+    if name == "bot":
+        return get_bot()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "BOT_TOKEN",

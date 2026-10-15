@@ -105,8 +105,83 @@ async def test_run_bot_lifecycle(tmp_db_path):
 
 
 def test_create_bot_helper():
-    b = create_bot("123456:FAKE_TOKEN")
+    import socket
+    b = create_bot(
+        "123456:FAKE_TOKEN",
+        proxy="socks5://127.0.0.1:1080",
+        api_server="https://api.mytelegram.com",
+    )
     assert b.token == "123456:FAKE_TOKEN"
+    assert b.session._connector_init["family"] == socket.AF_INET
+    assert b.session._proxy == "socks5://127.0.0.1:1080"
+
+
+@pytest.mark.asyncio
+async def test_run_bot_delete_webhook_retry_and_generic_error(tmp_db_path, monkeypatch):
+    import os
+    from aiogram.exceptions import TelegramNetworkError
+
+    cfg = Config(
+        BOT_TOKEN="123456:ABC",
+        OWNER_ID=111,
+        DB_DIR=os.path.dirname(tmp_db_path),
+        DB_PATH=tmp_db_path,
+        ALERT_CHECK_INTERVAL=60,
+        ALERT_WORKER_INITIAL_DELAY=1,
+    )
+
+
+    stop_event = asyncio.Event()
+    mock_bot_instance = MagicMock()
+    mock_bot_instance.session = MagicMock()
+    mock_bot_instance.session.close = AsyncMock()
+
+    # 1. First attempt fails with TelegramNetworkError, second succeeds
+    mock_bot_instance.delete_webhook = AsyncMock(
+        side_effect=[
+            TelegramNetworkError(method="deleteWebhook", message="Timeout"),
+            None,
+        ]
+    )
+
+    with patch("app.main.create_bot", return_value=mock_bot_instance):
+        with patch("aiogram.Dispatcher.start_polling", new_callable=AsyncMock) as mock_poll:
+            async def mock_start_polling(bot):
+                stop_event.set()
+
+            mock_poll.side_effect = mock_start_polling
+            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                await run_bot(cfg=cfg, stop_event=stop_event)
+                assert mock_bot_instance.delete_webhook.await_count == 2
+                mock_sleep.assert_awaited()
+
+    # 2. Generic exception during delete_webhook is handled gracefully
+    mock_bot_instance.delete_webhook = AsyncMock(side_effect=Exception("Generic error"))
+    stop_event.clear()
+    with patch("app.main.create_bot", return_value=mock_bot_instance):
+        with patch("aiogram.Dispatcher.start_polling", new_callable=AsyncMock) as mock_poll:
+            async def mock_start_polling(bot):
+                stop_event.set()
+
+            mock_poll.side_effect = mock_start_polling
+            await run_bot(cfg=cfg, stop_event=stop_event)
+            assert mock_bot_instance.delete_webhook.await_count == 1
+
+
+def test_bot_facade_lazy_load(monkeypatch):
+    import bot as bot_module
+
+    # Reset cached bot
+    bot_module._bot_instance = None
+    monkeypatch.setattr("bot.BOT_TOKEN", "123456:FAKETOKEN")
+
+    b = bot_module.bot
+    assert b is not None
+    assert b.token == "123456:FAKETOKEN"
+
+    # Non-existent attribute raises AttributeError
+    with pytest.raises(AttributeError):
+        _ = bot_module.non_existent_attribute_12345
 
 
 @pytest.mark.asyncio
@@ -126,5 +201,6 @@ def test_main_cli():
         from app.main import main
         main()
         mock_run.assert_called_once()
+
 
 
