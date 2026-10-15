@@ -149,9 +149,12 @@ def check_token(token):
             if response.status_code == 200:
                 data = response.json()
                 if data.get("code") == 200:
-                    response_data = data.get("data", {})
+                    r_data = data.get("data", {})
+                    response_data = r_data
                     successful_headers = headers
-                    break
+                    # Если получили непустые лимиты, останавливаемся
+                    if r_data.get("limits"):
+                        break
                 else:
                     last_err = data.get("msg") or f"API error code {data.get('code')}"
             else:
@@ -352,7 +355,8 @@ async def author_info_cb(callback: CallbackQuery):
     await callback.message.edit_text(
         f"🤖 <b>О проекте:</b> \nБот для мониторинга лимитов Z.ai.\n\n"
         f"👨‍💻 <b>Владелец:</b> <a href='tg://user?id={OWNER_ID}'>@theillarion</a>\n"
-        f"🐙 <b>Исходный код:</b> <a href='https://github.com/theillarion/z-ai-usage-tg-bot'>GitHub Repository</a>",
+        f"🐙 <b>Исходный код:</b> <a href='https://github.com/theillarion/z-ai-usage-tg-bot'>GitHub Repository</a>\n\n"
+        f"🏷 <b>Версия:</b> v2.1 (GLM V3 Credits Support)",
         reply_markup=kb,
         parse_mode="HTML",
         disable_web_page_preview=True
