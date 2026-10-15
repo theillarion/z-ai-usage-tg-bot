@@ -60,6 +60,13 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   name TEXT,
                   token TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS alerts
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  account_id INTEGER,
+                  alert_type TEXT,
+                  limit_unit INTEGER,
+                  threshold_pct REAL,
+                  last_triggered_reset_time INTEGER DEFAULT 0)''')
     conn.commit()
     conn.close()
 
@@ -92,6 +99,59 @@ def delete_account(acc_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM accounts WHERE id = ?", (acc_id,))
+    c.execute("DELETE FROM alerts WHERE account_id = ?", (acc_id,))
+    conn.commit()
+    conn.close()
+
+def add_alert(account_id, alert_type, limit_unit, threshold_pct):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""INSERT INTO alerts (account_id, alert_type, limit_unit, threshold_pct, last_triggered_reset_time)
+                 VALUES (?, ?, ?, ?, 0)""", (account_id, alert_type, limit_unit, threshold_pct))
+    conn.commit()
+    conn.close()
+
+def get_alerts_by_account(account_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, account_id, alert_type, limit_unit, threshold_pct, last_triggered_reset_time FROM alerts WHERE account_id = ?", (account_id,))
+    rows = c.fetchall()
+    conn.close()
+    return [{
+        "id": r[0],
+        "account_id": r[1],
+        "alert_type": r[2],
+        "limit_unit": r[3],
+        "threshold_pct": r[4],
+        "last_triggered_reset_time": r[5]
+    } for r in rows]
+
+def get_all_alerts():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, account_id, alert_type, limit_unit, threshold_pct, last_triggered_reset_time FROM alerts")
+    rows = c.fetchall()
+    conn.close()
+    return [{
+        "id": r[0],
+        "account_id": r[1],
+        "alert_type": r[2],
+        "limit_unit": r[3],
+        "threshold_pct": r[4],
+        "last_triggered_reset_time": r[5]
+    } for r in rows]
+
+def update_alert_triggered(alert_id, reset_time):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE alerts SET last_triggered_reset_time = ? WHERE id = ?", (reset_time, alert_id))
+    conn.commit()
+    conn.close()
+
+def delete_alert(alert_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM alerts WHERE id = ?", (alert_id,))
     conn.commit()
     conn.close()
 
@@ -337,7 +397,15 @@ class AddAccountFSM(StatesGroup):
     token = State()
     name = State()
 
+class CustomAlertFSM(StatesGroup):
+    pct = State()
+
 # --- Handlers ---
+@router.message(Command("cancel"))
+async def cancel_cmd(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Действие отменено.")
+
 @router.message(CommandStart())
 async def start_cmd(message: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -356,7 +424,7 @@ async def author_info_cb(callback: CallbackQuery):
         f"🤖 <b>О проекте:</b> \nБот для мониторинга лимитов Z.ai.\n\n"
         f"👨‍💻 <b>Владелец:</b> <a href='tg://user?id={OWNER_ID}'>@theillarion</a>\n"
         f"🐙 <b>Исходный код:</b> <a href='https://github.com/theillarion/z-ai-usage-tg-bot'>GitHub Repository</a>\n\n"
-        f"🏷 <b>Версия:</b> v2.1 (GLM V3 Credits Support)",
+        f"🏷 <b>Версия:</b> v2.2 (Alerts & Notifications)",
         reply_markup=kb,
         parse_mode="HTML",
         disable_web_page_preview=True
@@ -452,7 +520,11 @@ async def view_acc_cb(callback: CallbackQuery):
     ok, data = check_token(acc["token"])
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"view_{acc_id}"), InlineKeyboardButton(text="🗑 Удалить", callback_data=f"del_{acc_id}")],
+        [
+            InlineKeyboardButton(text="🔄 Обновить", callback_data=f"view_{acc_id}"),
+            InlineKeyboardButton(text="🔔 Алерты", callback_data=f"alerts_{acc_id}"),
+            InlineKeyboardButton(text="🗑 Удалить", callback_data=f"del_{acc_id}")
+        ],
         [InlineKeyboardButton(text="🔙 К списку", callback_data="list_accs")]
     ])
     
@@ -471,6 +543,235 @@ async def view_acc_cb(callback: CallbackQuery):
         except Exception:
             pass
 
+@router.callback_query(F.data.startswith("alerts_"))
+async def acc_alerts_cb(callback: CallbackQuery):
+    acc_id = int(callback.data.split("_")[1])
+    acc = get_account_by_id(acc_id)
+    if not acc:
+        await callback.answer("Аккаунт не найден", show_alert=True)
+        return
+        
+    alerts = get_alerts_by_account(acc_id)
+    text = f"🔔 <b>Настройки алертов для аккаунта:</b> {acc['name']}\n\n"
+    if not alerts:
+        text += "<i>У вас пока нет настроенных алертов для этого аккаунта.</i>\n"
+    else:
+        text += "<b>Активные алерты:</b>\n"
+        for idx, a in enumerate(alerts, 1):
+            unit_str = "5-часовой" if a["limit_unit"] == 3 else "Недельный"
+            if a["alert_type"] == "threshold":
+                pct_val = int(a['threshold_pct']) if a['threshold_pct'].is_integer() else a['threshold_pct']
+                rule_str = f"⏳ {unit_str} > {pct_val}%"
+            else:
+                rule_str = f"⚡️ {unit_str} Burn Rate (>50% за пол-периода)"
+            text += f"{idx}. {rule_str}\n"
+            
+    kb = []
+    if alerts:
+        for a in alerts:
+            unit_str = "5ч" if a["limit_unit"] == 3 else "Нед"
+            pct_val = int(a['threshold_pct']) if a['threshold_pct'].is_integer() else a['threshold_pct']
+            lbl = f"❌ Удалить: {unit_str} > {pct_val}%" if a["alert_type"] == "threshold" else f"❌ Удалить: {unit_str} BurnRate"
+            kb.append([InlineKeyboardButton(text=lbl, callback_data=f"delalert_{a['id']}_{acc_id}")])
+            
+    kb.append([InlineKeyboardButton(text="➕ Добавить алерт", callback_data=f"addalert_{acc_id}")])
+    kb.append([InlineKeyboardButton(text="🔙 Назад к аккаунту", callback_data=f"view_{acc_id}")])
+    
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("delalert_"))
+async def del_alert_cb(callback: CallbackQuery):
+    parts = callback.data.split("_")
+    alert_id = int(parts[1])
+    acc_id = int(parts[2])
+    delete_alert(alert_id)
+    await callback.answer("Алерт удален!")
+    callback.data = f"alerts_{acc_id}"
+    await acc_alerts_cb(callback)
+
+@router.callback_query(F.data.startswith("addalert_"))
+async def add_alert_menu_cb(callback: CallbackQuery):
+    acc_id = int(callback.data.split("_")[1])
+    acc = get_account_by_id(acc_id)
+    if not acc:
+        await callback.answer("Аккаунт не найден", show_alert=True)
+        return
+        
+    text = f"➕ <b>Выберите тип алерта для:</b> {acc['name']}"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏳ 5-часовой > 50%", callback_data=f"setalt_{acc_id}_threshold_3_50")],
+        [InlineKeyboardButton(text="⏳ 5-часовой > 80%", callback_data=f"setalt_{acc_id}_threshold_3_80")],
+        [InlineKeyboardButton(text="📅 Недельный > 50%", callback_data=f"setalt_{acc_id}_threshold_6_50")],
+        [InlineKeyboardButton(text="📅 Недельный > 80%", callback_data=f"setalt_{acc_id}_threshold_6_80")],
+        [InlineKeyboardButton(text="⚡️ 5ч Burn Rate (>50% за 2.5ч)", callback_data=f"setalt_{acc_id}_burn_3_50")],
+        [InlineKeyboardButton(text="⚡️ Неделя Burn Rate (>50% за 3.5д)", callback_data=f"setalt_{acc_id}_burn_6_50")],
+        [InlineKeyboardButton(text="✏️ Свой процент...", callback_data=f"customunit_{acc_id}")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data=f"alerts_{acc_id}")]
+    ])
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("setalt_"))
+async def set_alert_preset_cb(callback: CallbackQuery):
+    parts = callback.data.split("_")
+    acc_id = int(parts[1])
+    alert_type = parts[2]
+    if alert_type == "burn":
+        alert_type = "burn_rate"
+    unit = int(parts[3])
+    pct = float(parts[4])
+    
+    add_alert(acc_id, alert_type, unit, pct)
+    await callback.answer("Алерт успешно добавлен!")
+    callback.data = f"alerts_{acc_id}"
+    await acc_alerts_cb(callback)
+
+@router.callback_query(F.data.startswith("customunit_"))
+async def custom_unit_choice_cb(callback: CallbackQuery):
+    acc_id = int(callback.data.split("_")[1])
+    text = "Для какого лимита настроить порог срабатывания?"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏳ 5-часовой лимит", callback_data=f"customchoose_{acc_id}_3")],
+        [InlineKeyboardButton(text="📅 Недельный лимит", callback_data=f"customchoose_{acc_id}_6")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data=f"addalert_{acc_id}")]
+    ])
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("customchoose_"))
+async def custom_choose_cb(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")
+    acc_id = int(parts[1])
+    unit = int(parts[2])
+    
+    await state.update_data(acc_id=acc_id, unit=unit)
+    await state.set_state(CustomAlertFSM.pct)
+    
+    unit_str = "5-часового" if unit == 3 else "недельного"
+    await callback.message.answer(
+        f"Введите процент использования для <b>{unit_str} лимита</b> (число от 1 до 99):\n"
+        f"Например: <code>70</code>\n\n"
+        f"<i>Для отмены отправьте /cancel</i>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.message(CustomAlertFSM.pct)
+async def custom_alert_pct_input(message: Message, state: FSMContext):
+    text = message.text.strip().replace("%", "")
+    try:
+        pct = float(text)
+        if not (1 <= pct <= 99):
+            raise ValueError()
+    except ValueError:
+        await message.answer("❌ Пожалуйста, введите корректное число от 1 до 99 (например, 75).")
+        return
+        
+    data = await state.get_data()
+    acc_id = data["acc_id"]
+    unit = data["unit"]
+    
+    add_alert(acc_id, "threshold", unit, pct)
+    await state.clear()
+    
+    unit_str = "5-часового" if unit == 3 else "недельного"
+    pct_display = int(pct) if pct.is_integer() else pct
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔔 К списку алертов", callback_data=f"alerts_{acc_id}")],
+        [InlineKeyboardButton(text="Главное меню", callback_data="start_menu")]
+    ])
+    await message.answer(
+        f"✅ Алерт сохранен: оповестить, когда расход <b>{unit_str} лимита</b> превысит <b>{pct_display}%</b>!",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+# --- Background Worker for Alerts ---
+async def check_alerts_job():
+    alerts = get_all_alerts()
+    if not alerts:
+        return
+        
+    accounts = {acc["id"]: acc for acc in get_accounts()}
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    
+    acc_alerts_map = {}
+    for a in alerts:
+        acc_alerts_map.setdefault(a["account_id"], []).append(a)
+        
+    for acc_id, acc_alerts in acc_alerts_map.items():
+        acc = accounts.get(acc_id)
+        if not acc:
+            continue
+            
+        ok, data = check_token(acc["token"])
+        if not ok or not data:
+            continue
+            
+        limits = data.get("limits", [])
+        if not limits:
+            continue
+            
+        for a in acc_alerts:
+            unit = a["limit_unit"]
+            matching_limit = next((l for l in limits if l.get("unit") == unit), None)
+            if not matching_limit:
+                continue
+                
+            pct = matching_limit.get("percentage", 0)
+            next_reset = matching_limit.get("nextResetTime", 0)
+            current_val = matching_limit.get("currentValue")
+            usage_val = matching_limit.get("usage")
+            last_reset = a["last_triggered_reset_time"]
+            
+            # Anti-spam: check if already notified in this reset period
+            if last_reset and next_reset and last_reset == next_reset:
+                continue
+                
+            should_trigger = False
+            trigger_reason = ""
+            unit_name = "5-часовой" if unit == 3 else ("Недельный" if unit == 6 else f"Лимит unit={unit}")
+            
+            if a["alert_type"] == "threshold":
+                thresh = a["threshold_pct"]
+                if pct >= thresh:
+                    should_trigger = True
+                    thresh_str = int(thresh) if thresh.is_integer() else thresh
+                    trigger_reason = f"Порог <b>{thresh_str}%</b> превышен (текущий расход: <b>{pct}%</b>)"
+                    
+            elif a["alert_type"] == "burn_rate":
+                window_duration_ms = (5 * 3600 * 1000) if unit == 3 else (7 * 86400 * 1000)
+                remaining_ms = next_reset - now_ms if next_reset else 0
+                
+                # Consumed >= 50% while more than 50% of the period time is still remaining
+                if remaining_ms > (window_duration_ms / 2) and pct >= 50:
+                    should_trigger = True
+                    trigger_reason = f"⚡️ <b>Быстрый расход (Burn Rate):</b> израсходовано <b>{pct}%</b> лимита, хотя прошло меньше половины срока!"
+                    
+            if should_trigger:
+                count_str = f" ({current_val} / {usage_val} Credits)" if (current_val is not None and usage_val is not None) else ""
+                alert_text = (
+                    f"🔔 <b>Алерт по аккаунту:</b> {acc['name']}\n\n"
+                    f"📊 <b>Квота:</b> {unit_name}\n"
+                    f"⚠️ <b>Причина:</b> {trigger_reason}{count_str}\n"
+                    f"⏳ <b>Сброс лимита:</b> {format_ts_msk(next_reset)}\n"
+                )
+                try:
+                    await bot.send_message(OWNER_ID, alert_text, parse_mode="HTML")
+                    update_alert_triggered(a["id"], next_reset or 1)
+                except Exception as e:
+                    logging.error(f"Failed to send alert to {OWNER_ID}: {e}")
+
+async def alerts_background_worker():
+    await asyncio.sleep(10)
+    while True:
+        try:
+            await check_alerts_job()
+        except Exception as e:
+            logging.error(f"Error in alerts background worker: {e}")
+        await asyncio.sleep(300)
+
 @router.callback_query(F.data.startswith("del_"))
 async def del_acc_cb(callback: CallbackQuery):
     acc_id = int(callback.data.split("_")[1])
@@ -482,6 +783,7 @@ async def main():
     init_db()
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
+    asyncio.create_task(alerts_background_worker())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
