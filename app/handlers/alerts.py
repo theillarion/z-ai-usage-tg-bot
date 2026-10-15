@@ -23,10 +23,8 @@ from app.states import CustomAlertFSM
 router = Router(name="alerts")
 
 
-@router.callback_query(F.data.startswith("alerts_"))
-async def acc_alerts_cb(callback: CallbackQuery):
+async def _render_account_alerts(callback: CallbackQuery, acc_id: int):
     """Render list of alerts configured by current user for the selected account."""
-    acc_id = int(callback.data.split("_")[1])
     from_user = getattr(callback, "from_user", None)
     user_id = getattr(from_user, "id", config.OWNER_ID) if from_user else config.OWNER_ID
 
@@ -58,7 +56,17 @@ async def acc_alerts_cb(callback: CallbackQuery):
 
     kb = get_alerts_list_kb(acc_id, alerts)
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    await callback.answer()
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.startswith("alerts_"))
+async def acc_alerts_cb(callback: CallbackQuery):
+    """Render list of alerts configured by current user for the selected account."""
+    acc_id = int(callback.data.split("_")[1])
+    await _render_account_alerts(callback, acc_id)
 
 
 @router.callback_query(F.data.startswith("delalert_"))
@@ -69,8 +77,7 @@ async def del_alert_cb(callback: CallbackQuery):
     acc_id = int(parts[2])
     delete_alert(alert_id)
     await callback.answer("Алерт удален!")
-    callback.data = f"alerts_{acc_id}"
-    await acc_alerts_cb(callback)
+    await _render_account_alerts(callback, acc_id)
 
 
 @router.callback_query(F.data.startswith("addalert_"))
@@ -89,7 +96,6 @@ async def add_alert_menu_cb(callback: CallbackQuery):
     if not has_access:
         await callback.answer("Доступ запрещен.", show_alert=True)
         return
-
 
     text = f"➕ <b>Выберите тип алерта для:</b> {acc['name']}"
     kb = get_add_alert_menu_kb(acc_id)
@@ -112,8 +118,8 @@ async def set_alert_preset_cb(callback: CallbackQuery):
     user_id = getattr(from_user, "id", config.OWNER_ID) if from_user else config.OWNER_ID
     add_alert(acc_id, alert_type, unit, pct, user_id=user_id)
     await callback.answer("Алерт успешно добавлен!")
-    callback.data = f"alerts_{acc_id}"
-    await acc_alerts_cb(callback)
+    await _render_account_alerts(callback, acc_id)
+
 
 
 @router.callback_query(F.data.startswith("customunit_"))

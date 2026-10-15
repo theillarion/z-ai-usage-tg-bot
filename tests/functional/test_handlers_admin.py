@@ -98,6 +98,14 @@ async def test_admin_approve_and_reject(tmp_db_path, monkeypatch, mock_bot):
     assert get_user(222, tmp_db_path)["is_approved"] is True
     mock_bot.send_message.assert_awaited_once()
     assert "заявка одобрена" in mock_bot.send_message.call_args[0][1]
+    cb_appr.message.edit_text.assert_awaited_once()
+
+    # Second click on Approve (idempotent: does NOT send duplicate message)
+    mock_bot.send_message.reset_mock()
+    cb_appr_dup = _make_cb(111, "adm_appr_222")
+    await admin_approve_cb(cb_appr_dup, mock_bot)
+    mock_bot.send_message.assert_not_awaited()
+    cb_appr_dup.answer.assert_awaited_with("Пользователь уже одобрен.")
 
     # Reject
     mock_bot.send_message.reset_mock()
@@ -106,6 +114,19 @@ async def test_admin_approve_and_reject(tmp_db_path, monkeypatch, mock_bot):
     assert get_user(222, tmp_db_path)["is_approved"] is False
     mock_bot.send_message.assert_awaited_once()
     assert "отозван" in mock_bot.send_message.call_args[0][1]
+    cb_rejc.message.edit_text.assert_awaited_once()
+
+    # Second click on Reject (idempotent: does NOT send duplicate message)
+    # Missing user tests
+    cb_appr_missing = _make_cb(111, "adm_appr_99999")
+    await admin_approve_cb(cb_appr_missing, mock_bot)
+    cb_appr_missing.answer.assert_awaited_with("Пользователь не найден", show_alert=True)
+
+    cb_rejc_missing = _make_cb(111, "adm_rejc_99999")
+    await admin_reject_cb(cb_rejc_missing, mock_bot)
+    cb_rejc_missing.answer.assert_awaited_with("Пользователь не найден", show_alert=True)
+
+
 
 
 @pytest.mark.asyncio
@@ -261,6 +282,44 @@ async def test_admin_share_missing_account_and_exceptions(tmp_db_path, monkeypat
     cb_unshare = _make_cb(111, f"unshare_{acc_id}_222")
     await unshare_account_cb(cb_unshare, mock_bot)
     assert len(get_shared_users_for_account(acc_id, db_path=tmp_db_path)) == 0
+
+
+@pytest.mark.asyncio
+async def test_frozen_callback_query_compatibility(tmp_db_path, monkeypatch, mock_bot):
+    """Ensure handlers work with frozen Pydantic v2 CallbackQuery models without mutating cb.data."""
+    from datetime import datetime
+    from aiogram.types import Chat
+
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+
+    upsert_user(333, "frozen_user", "Frozen", is_approved=0, db_path=tmp_db_path)
+
+    # Real frozen CallbackQuery
+    real_cb = CallbackQuery(
+        id="cb_real_1",
+        from_user=User(id=111, is_bot=False, first_name="Owner"),
+        chat_instance="ci_1",
+        data="adm_appr_333",
+        message=Message(
+            message_id=999,
+            date=datetime.now(),
+            chat=Chat(id=111, type="private"),
+            text="🔔 Новый запрос на доступ к боту!",
+        ),
+    )
+    # Mock methods using object.__setattr__ to bypass Pydantic frozen check
+    answer_mock = AsyncMock()
+    edit_mock = AsyncMock()
+    object.__setattr__(real_cb, "answer", answer_mock)
+    object.__setattr__(real_cb.message, "edit_text", edit_mock)
+
+    await admin_approve_cb(real_cb, mock_bot)
+    assert get_user(333, db_path=tmp_db_path)["is_approved"] is True
+    edit_mock.assert_awaited_once()
+    assert "✅ Одобрен" in edit_mock.call_args[0][0]
+
+
 
 
 

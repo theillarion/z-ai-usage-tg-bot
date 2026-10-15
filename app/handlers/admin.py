@@ -68,6 +68,22 @@ async def admin_users_cb(callback: CallbackQuery):
     await callback.answer()
 
 
+async def _render_user_card(callback: CallbackQuery, target: Dict[str, Any]):
+    """Render or update user details card."""
+    target_id = target["user_id"]
+    is_approved = target["is_approved"]
+    status_str = "✅ Одобрен" if is_approved else "⏳ Ожидает одобрения / Отклонён"
+    uname_str = f"@{target['username']}" if target.get("username") else "нет"
+    text = (
+        f"👤 <b>Пользователь:</b> {target.get('first_name') or 'Без имени'}\n"
+        f"🆔 <b>ID:</b> <code>{target_id}</code>\n"
+        f"💬 <b>Username:</b> {uname_str}\n"
+        f"📊 <b>Статус:</b> {status_str}\n"
+    )
+    kb = get_admin_user_detail_kb(target_id, is_approved)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
+
 @router.callback_query(F.data.startswith("adm_usr_"))
 async def admin_user_detail_cb(callback: CallbackQuery):
     """Show details for selected user with toggle button."""
@@ -81,17 +97,11 @@ async def admin_user_detail_cb(callback: CallbackQuery):
         await callback.answer("Пользователь не найден", show_alert=True)
         return
 
-    status_str = "✅ Одобрен" if target["is_approved"] else "⏳ Ожидает одобрения"
-    uname_str = f"@{target['username']}" if target["username"] else "нет"
-    text = (
-        f"👤 <b>Пользователь:</b> {target['first_name'] or 'Без имени'}\n"
-        f"🆔 <b>ID:</b> <code>{target['user_id']}</code>\n"
-        f"💬 <b>Username:</b> {uname_str}\n"
-        f"📊 <b>Статус:</b> {status_str}\n"
-    )
-    kb = get_admin_user_detail_kb(target_id, target["is_approved"])
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    await callback.answer()
+    await _render_user_card(callback, target)
+    try:
+        await callback.answer()
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data.startswith("adm_appr_"))
@@ -102,6 +112,17 @@ async def admin_approve_cb(callback: CallbackQuery, bot: Bot):
         return
 
     target_id = int(callback.data.split("_")[2])
+    target = get_user(target_id)
+    if not target:
+        await callback.answer("Пользователь не найден", show_alert=True)
+        return
+
+    # Anti-spam / idempotency: do not notify again if already approved
+    if target["is_approved"]:
+        await callback.answer("Пользователь уже одобрен.")
+        await _render_user_card(callback, target)
+        return
+
     set_user_approval(target_id, 1)
 
     try:
@@ -114,8 +135,8 @@ async def admin_approve_cb(callback: CallbackQuery, bot: Bot):
         pass
 
     await callback.answer("Доступ одобрен!")
-    callback.data = f"adm_usr_{target_id}"
-    await admin_user_detail_cb(callback)
+    target["is_approved"] = True
+    await _render_user_card(callback, target)
 
 
 @router.callback_query(F.data.startswith("adm_rejc_"))
@@ -126,6 +147,17 @@ async def admin_reject_cb(callback: CallbackQuery, bot: Bot):
         return
 
     target_id = int(callback.data.split("_")[2])
+    target = get_user(target_id)
+    if not target:
+        await callback.answer("Пользователь не найден", show_alert=True)
+        return
+
+    # Anti-spam / idempotency: do not notify again if already revoked/unapproved
+    if not target["is_approved"]:
+        await callback.answer("Доступ пользователя уже закрыт.")
+        await _render_user_card(callback, target)
+        return
+
     set_user_approval(target_id, 0)
 
     try:
@@ -138,8 +170,9 @@ async def admin_reject_cb(callback: CallbackQuery, bot: Bot):
         pass
 
     await callback.answer("Доступ отозван!")
-    callback.data = f"adm_usr_{target_id}"
-    await admin_user_detail_cb(callback)
+    target["is_approved"] = False
+    await _render_user_card(callback, target)
+
 
 
 @router.callback_query(F.data == "admin_shares")
@@ -160,10 +193,8 @@ async def admin_shares_cb(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("accshare_"))
-async def account_share_manage_cb(callback: CallbackQuery):
+async def _render_account_shares(callback: CallbackQuery, acc_id: int):
     """View and manage users who have access to this account."""
-    acc_id = int(callback.data.split("_")[1])
     user_id = callback.from_user.id
 
     has_access, is_owner = check_account_access(acc_id, user_id)
@@ -196,7 +227,17 @@ async def account_share_manage_cb(callback: CallbackQuery):
 
     kb = get_account_shares_management_kb(acc_id, shared_users, bool(available_users))
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    await callback.answer()
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.startswith("accshare_"))
+async def account_share_manage_cb(callback: CallbackQuery):
+    """View and manage users who have access to this account."""
+    acc_id = int(callback.data.split("_")[1])
+    await _render_account_shares(callback, acc_id)
 
 
 @router.callback_query(F.data.startswith("sharepick_"))
@@ -261,8 +302,7 @@ async def do_share_account_cb(callback: CallbackQuery, bot: Bot):
         pass
 
     await callback.answer("Доступ успешно выдан!")
-    callback.data = f"accshare_{acc_id}"
-    await account_share_manage_cb(callback)
+    await _render_account_shares(callback, acc_id)
 
 
 @router.callback_query(F.data.startswith("unshare_"))
@@ -285,7 +325,6 @@ async def unshare_account_cb(callback: CallbackQuery, bot: Bot):
 
     unshare_account(acc_id, target_uid)
 
-
     try:
         await bot.send_message(
             target_uid,
@@ -296,5 +335,5 @@ async def unshare_account_cb(callback: CallbackQuery, bot: Bot):
         pass
 
     await callback.answer("Доступ отозван!")
-    callback.data = f"accshare_{acc_id}"
-    await account_share_manage_cb(callback)
+    await _render_account_shares(callback, acc_id)
+
