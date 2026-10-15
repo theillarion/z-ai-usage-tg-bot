@@ -209,3 +209,39 @@ async def test_custom_alert_pct_input_valid(mock_fsm_context, tmp_db_path, monke
     alerts = get_alerts_by_account(acc_id, tmp_db_path)
     assert len(alerts) == 1
     assert alerts[0]["threshold_pct"] == 75.0
+
+
+@pytest.mark.asyncio
+async def test_acc_alerts_cb_unauthorized(tmp_db_path, monkeypatch):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+
+    acc_id = add_account("SecretAcc", "tok", user_id=111, db_path=tmp_db_path)
+
+    # User 222 has no access
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.data = f"alerts_{acc_id}"
+    mock_cb.from_user = MagicMock()
+    mock_cb.from_user.id = 222
+    mock_cb.answer = AsyncMock()
+
+    await acc_alerts_cb(mock_cb)
+    mock_cb.answer.assert_awaited_with("Доступ запрещен.", show_alert=True)
+
+
+@pytest.mark.asyncio
+async def test_add_alert_menu_cb_unauthorized(tmp_db_path, monkeypatch):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+
+    acc_id = add_account("SecretAcc", "tok", user_id=111, db_path=tmp_db_path)
+
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.data = f"addalert_{acc_id}"
+    mock_cb.from_user = MagicMock()
+    mock_cb.from_user.id = 222
+    mock_cb.answer = AsyncMock()
+
+    await add_alert_menu_cb(mock_cb)
+    mock_cb.answer.assert_awaited_with("Доступ запрещен.", show_alert=True)
+

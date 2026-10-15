@@ -21,10 +21,15 @@ async def cancel_cmd(message: Message, state: FSMContext):
 @router.message(CommandStart())
 async def start_cmd(message: Message):
     """Handle /start command and render main menu."""
+    from_user = getattr(message, "from_user", None)
+    user_id = getattr(from_user, "id", 0) if from_user else 0
+    is_admin = bool(config.OWNER_ID and user_id == config.OWNER_ID)
     await message.answer(
         "Привет! Я приватный бот для мониторинга лимитов Z.ai.\nЧто будем делать?",
-        reply_markup=get_main_menu_kb(),
+        reply_markup=get_main_menu_kb(is_admin=is_admin),
     )
+
+
 
 
 @router.callback_query(F.data == "author_info")

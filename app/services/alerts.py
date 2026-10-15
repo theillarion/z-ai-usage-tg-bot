@@ -126,14 +126,16 @@ async def check_alerts_job(
                     f"⚠️ <b>Причина:</b> {trigger_reason}{count_str}\n"
                     f"⏳ <b>Сброс лимита:</b> {format_ts_msk(next_reset)}\n"
                 )
+                target_user = a.get("user_id") or owner_id
                 try:
-                    await bot.send_message(owner_id, alert_text, parse_mode="HTML")
+                    await bot.send_message(target_user, alert_text, parse_mode="HTML")
                     update_alert_triggered(a["id"], next_reset or 1, db_path)
                     triggered_count += 1
                 except Exception as e:
-                    logging.error(f"Failed to send alert to {owner_id}: {e}")
+                    logging.error(f"Failed to send alert to {target_user}: {e}")
 
     return triggered_count
+
 
 
 async def alerts_background_worker(

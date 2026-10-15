@@ -252,3 +252,41 @@ async def test_del_acc_cb(tmp_db_path, monkeypatch):
     assert get_accounts(tmp_db_path) == []
     mock_cb.answer.assert_awaited_with("Удалено!")
     mock_cb.message.edit_text.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_view_acc_cb_unauthorized(tmp_db_path, monkeypatch):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+
+    # Account owned by 111
+    acc_id = add_account("SecretAcc", "tok", user_id=111, db_path=tmp_db_path)
+
+    # User 222 tries to view it without permission
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.data = f"view_{acc_id}"
+    mock_cb.from_user = MagicMock()
+    mock_cb.from_user.id = 222
+    mock_cb.answer = AsyncMock()
+
+    await view_acc_cb(mock_cb)
+    mock_cb.answer.assert_awaited_with("Доступ запрещен.", show_alert=True)
+
+
+@pytest.mark.asyncio
+async def test_del_acc_cb_unauthorized(tmp_db_path, monkeypatch):
+    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
+    monkeypatch.setattr("app.config.config.OWNER_ID", 111)
+
+    acc_id = add_account("SecretAcc", "tok", user_id=111, db_path=tmp_db_path)
+
+    # User 222 tries to delete it without permission
+    mock_cb = MagicMock(spec=CallbackQuery)
+    mock_cb.data = f"del_{acc_id}"
+    mock_cb.from_user = MagicMock()
+    mock_cb.from_user.id = 222
+    mock_cb.answer = AsyncMock()
+
+    await del_acc_cb(mock_cb)
+    mock_cb.answer.assert_awaited_with("У вас нет прав на удаление этого аккаунта", show_alert=True)
+

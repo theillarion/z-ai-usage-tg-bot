@@ -1,11 +1,13 @@
-"""Account management handlers: add, view, list, delete."""
+"""Account management handlers: add, view, list, delete with token security and permission checks."""
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from app.config import config
 from app.database import (
     add_account,
+    check_account_access,
     delete_account,
     get_account_by_id,
     get_accounts,
@@ -29,7 +31,8 @@ async def add_acc_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "Пришли мне твой API ключ (Bearer token) от Z.ai.\n\n"
         "💡 <i>Подсказка: ты можешь сгенерировать постоянный API-ключ на странице "
-        "https://z.ai/manage-apikey</i>",
+        "https://z.ai/manage-apikey</i>\n\n"
+        "🔒 <i>В целях безопасности ваше сообщение с ключом будет удалено сразу после обработки.</i>",
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
@@ -39,8 +42,15 @@ async def add_acc_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AddAccountFSM.token)
 async def add_acc_token(message: Message, state: FSMContext):
-    """Validate submitted token and proceed to account naming."""
+    """Validate submitted token, clean up message for privacy, and proceed to naming."""
     token = message.text.strip()
+
+    # Security: Delete message containing sensitive Bearer token from chat history
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
     if "…" in token or "\u2026" in token:
         await message.answer("❌ Ошибка: В токене есть многоточие. Скопируй ключ целиком!")
         return
@@ -66,12 +76,14 @@ async def add_acc_token(message: Message, state: FSMContext):
 
 @router.message(AddAccountFSM.name)
 async def add_acc_name(message: Message, state: FSMContext):
-    """Save the named account to the database."""
+    """Save the named account associated with user_id."""
     name = message.text.strip()
     data = await state.get_data()
     token = data["token"]
 
-    add_account(name, token)
+    from_user = getattr(message, "from_user", None)
+    user_id = getattr(from_user, "id", config.OWNER_ID) if from_user else config.OWNER_ID
+    add_account(name, token, user_id=user_id)
     await state.clear()
 
     await message.answer(
@@ -82,8 +94,10 @@ async def add_acc_name(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "list_accs")
 async def list_accs_cb(callback: CallbackQuery):
-    """List all accounts or display empty state."""
-    accs = get_accounts()
+    """List accessible accounts (owned + shared) or display empty state."""
+    from_user = getattr(callback, "from_user", None)
+    user_id = getattr(from_user, "id", None) if from_user else None
+    accs = get_accounts(user_id=user_id)
     if not accs:
         await callback.message.edit_text(
             "У вас пока нет добавленных аккаунтов.",
@@ -100,18 +114,27 @@ async def list_accs_cb(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("view_"))
 async def view_acc_cb(callback: CallbackQuery):
-    """View quota and subscription details for a specific account."""
+    """View quota and subscription details for a specific account with access verification."""
     acc_id = int(callback.data.split("_")[1])
-    acc = get_account_by_id(acc_id)
+    from_user = getattr(callback, "from_user", None)
+    user_id = getattr(from_user, "id", config.OWNER_ID) if from_user else config.OWNER_ID
 
+    acc = get_account_by_id(acc_id)
     if not acc:
         await callback.answer("Аккаунт не найден", show_alert=True)
         return
 
+    has_access, is_owner = check_account_access(acc_id, user_id)
+    if not has_access:
+        await callback.answer("Доступ запрещен.", show_alert=True)
+        return
+
+
     await callback.message.edit_text(f"🔄 Запрашиваю лимиты для '{acc['name']}'...")
 
     ok, data = check_token(acc["token"])
-    kb = get_account_view_kb(acc_id)
+    is_admin = bool(config.OWNER_ID and user_id == config.OWNER_ID)
+    kb = get_account_view_kb(acc_id, is_owner=is_owner, is_admin=is_admin)
 
     if ok:
         text = format_limits_text(acc["name"], data)
@@ -134,8 +157,19 @@ async def view_acc_cb(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("del_"))
 async def del_acc_cb(callback: CallbackQuery):
-    """Delete an account and refresh the accounts list."""
+    """Delete an account after validating owner or admin privileges."""
     acc_id = int(callback.data.split("_")[1])
+    from_user = getattr(callback, "from_user", None)
+    user_id = getattr(from_user, "id", config.OWNER_ID) if from_user else config.OWNER_ID
+
+    has_access, is_owner = check_account_access(acc_id, user_id)
+    is_admin = bool(config.OWNER_ID and user_id == config.OWNER_ID)
+
+    if not (is_owner or is_admin):
+        await callback.answer("У вас нет прав на удаление этого аккаунта", show_alert=True)
+        return
+
     delete_account(acc_id)
     await callback.answer("Удалено!")
     await list_accs_cb(callback)
+

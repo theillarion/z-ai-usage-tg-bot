@@ -1,11 +1,13 @@
-"""Alert management handlers: configure, add presets, custom threshold, delete."""
+"""Alert management handlers: configure, add presets, custom threshold, delete with user scoping."""
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from app.config import config
 from app.database import (
     add_alert,
+    check_account_access,
     delete_alert,
     get_account_by_id,
     get_alerts_by_account,
@@ -23,14 +25,22 @@ router = Router(name="alerts")
 
 @router.callback_query(F.data.startswith("alerts_"))
 async def acc_alerts_cb(callback: CallbackQuery):
-    """Render list of alerts configured for the selected account."""
+    """Render list of alerts configured by current user for the selected account."""
     acc_id = int(callback.data.split("_")[1])
+    from_user = getattr(callback, "from_user", None)
+    user_id = getattr(from_user, "id", config.OWNER_ID) if from_user else config.OWNER_ID
+
     acc = get_account_by_id(acc_id)
     if not acc:
         await callback.answer("Аккаунт не найден", show_alert=True)
         return
 
-    alerts = get_alerts_by_account(acc_id)
+    has_access, _ = check_account_access(acc_id, user_id)
+    if not has_access:
+        await callback.answer("Доступ запрещен.", show_alert=True)
+        return
+
+    alerts = get_alerts_by_account(acc_id, user_id=user_id)
     text = f"🔔 <b>Настройки алертов для аккаунта:</b> {acc['name']}\n\n"
     if not alerts:
         text += "<i>У вас пока нет настроенных алертов для этого аккаунта.</i>\n"
@@ -67,10 +77,19 @@ async def del_alert_cb(callback: CallbackQuery):
 async def add_alert_menu_cb(callback: CallbackQuery):
     """Show preset alert choices and custom percentage option."""
     acc_id = int(callback.data.split("_")[1])
+    from_user = getattr(callback, "from_user", None)
+    user_id = getattr(from_user, "id", config.OWNER_ID) if from_user else config.OWNER_ID
+
     acc = get_account_by_id(acc_id)
     if not acc:
         await callback.answer("Аккаунт не найден", show_alert=True)
         return
+
+    has_access, _ = check_account_access(acc_id, user_id)
+    if not has_access:
+        await callback.answer("Доступ запрещен.", show_alert=True)
+        return
+
 
     text = f"➕ <b>Выберите тип алерта для:</b> {acc['name']}"
     kb = get_add_alert_menu_kb(acc_id)
@@ -89,7 +108,9 @@ async def set_alert_preset_cb(callback: CallbackQuery):
     unit = int(parts[3])
     pct = float(parts[4])
 
-    add_alert(acc_id, alert_type, unit, pct)
+    from_user = getattr(callback, "from_user", None)
+    user_id = getattr(from_user, "id", config.OWNER_ID) if from_user else config.OWNER_ID
+    add_alert(acc_id, alert_type, unit, pct, user_id=user_id)
     await callback.answer("Алерт успешно добавлен!")
     callback.data = f"alerts_{acc_id}"
     await acc_alerts_cb(callback)
@@ -141,8 +162,11 @@ async def custom_alert_pct_input(message: Message, state: FSMContext):
     acc_id = data["acc_id"]
     unit = data["unit"]
 
-    add_alert(acc_id, "threshold", unit, pct)
+    from_user = getattr(message, "from_user", None)
+    user_id = getattr(from_user, "id", config.OWNER_ID) if from_user else config.OWNER_ID
+    add_alert(acc_id, "threshold", unit, pct, user_id=user_id)
     await state.clear()
+
 
     unit_str = "5-часового" if unit == 3 else "недельного"
     pct_display = int(pct) if pct.is_integer() else pct
