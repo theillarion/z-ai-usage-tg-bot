@@ -114,6 +114,10 @@ def test_create_bot_helper():
     assert b.token == "123456:FAKE_TOKEN"
     assert b.session._connector_init["family"] == socket.AF_INET
     assert b.session._proxy == "socks5://127.0.0.1:1080"
+    # Verify timeout is compatible with aiogram polling arithmetic: int(bot.session.timeout + polling_timeout)
+    assert isinstance(b.session.timeout, (int, float))
+    assert int(b.session.timeout + 10) == 70
+
 
 
 @pytest.mark.asyncio

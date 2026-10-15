@@ -5,8 +5,8 @@ import logging
 import sys
 import socket
 from typing import Optional
-from aiohttp import ClientTimeout
 from aiogram import Bot, Dispatcher
+
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
@@ -26,12 +26,12 @@ def create_bot(
     api_server: Optional[str] = None,
 ) -> Bot:
     """Instantiate Aiogram Bot with IPv4 connector and optional proxy."""
-    timeout = ClientTimeout(total=60.0, connect=15.0, sock_connect=15.0)
-    session = AiohttpSession(proxy=proxy, timeout=timeout)
+    session = AiohttpSession(proxy=proxy, timeout=60.0)
     # Force IPv4 to prevent hanging on misconfigured IPv6 / aiohappyeyeballs in Docker / Linux
     session._connector_init["family"] = socket.AF_INET
     if api_server:
         session.api = TelegramAPIServer.from_base(api_server)
+
 
     return Bot(
         token=token,
