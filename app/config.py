@@ -53,8 +53,9 @@ def load_config() -> Config:
 
     telegram_proxy = os.getenv("TELEGRAM_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
     if telegram_proxy:
-        telegram_proxy = telegram_proxy.strip()
-    telegram_api_server = os.getenv("TELEGRAM_API_SERVER", "").strip() or None
+        telegram_proxy = telegram_proxy.strip().strip("\"'")
+    telegram_api_server = os.getenv("TELEGRAM_API_SERVER", "").strip().strip("\"'") or None
+
 
     return Config(
         BOT_TOKEN=bot_token,
