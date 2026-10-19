@@ -327,7 +327,7 @@ async def test_add_acc_name_expired_session(mock_fsm_context):
 
 
 @pytest.mark.asyncio
-async def test_view_acc_cb_message_not_modified(tmp_db_path, monkeypatch):
+async def test_view_acc_cb_message_not_modified_authorized(tmp_db_path, monkeypatch):
     monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
     monkeypatch.setattr("app.config.config.OWNER_ID", 111)
 

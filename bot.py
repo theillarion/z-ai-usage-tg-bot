@@ -57,7 +57,7 @@ def __getattr__(name: str):
 __all__ = [
     "BOT_TOKEN",
     "OWNER_ID",
-    "bot",
+    "bot",  # noqa: F822 (provided via module __getattr__)
     "dp",
     "router",
     "main",

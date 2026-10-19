@@ -8,7 +8,6 @@ from app.database import (
     add_account,
     get_shared_users_for_account,
     get_user,
-    share_account,
     upsert_user,
 )
 from app.handlers.admin import (

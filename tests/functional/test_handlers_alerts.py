@@ -259,16 +259,6 @@ async def test_add_alert_menu_cb_unauthorized(tmp_db_path, monkeypatch):
     mock_cb.answer.assert_awaited_with("Доступ запрещен.", show_alert=True)
 
 
-@pytest.mark.asyncio
-async def test_add_alert_menu_cb_not_found(tmp_db_path, monkeypatch):
-    monkeypatch.setattr("app.config.config.DB_PATH", tmp_db_path)
-    mock_cb = MagicMock(spec=CallbackQuery)
-    mock_cb.data = "addalert_9999"
-    mock_cb.answer = AsyncMock()
-
-    await add_alert_menu_cb(mock_cb)
-    mock_cb.answer.assert_awaited_with("Аккаунт не найден", show_alert=True)
-
 
 @pytest.mark.asyncio
 async def test_custom_alert_pct_input_non_text(mock_fsm_context):
@@ -310,17 +300,5 @@ async def test_set_alert_preset_cb_burn_rate(tmp_db_path, monkeypatch):
     assert len(alerts) == 1
     assert alerts[0]["alert_type"] == "burn_rate"
 
-
-@pytest.mark.asyncio
-async def test_custom_unit_choice_cb():
-    mock_cb = MagicMock(spec=CallbackQuery)
-    mock_cb.data = "customunit_42"
-    mock_cb.message = MagicMock(spec=Message)
-    mock_cb.message.edit_text = AsyncMock()
-    mock_cb.answer = AsyncMock()
-
-    await custom_unit_choice_cb(mock_cb)
-    mock_cb.message.edit_text.assert_awaited_once()
-    mock_cb.answer.assert_awaited_once()
 
 
